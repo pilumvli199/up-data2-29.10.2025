@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-HYBRID TRADING BOT v12.0
+HYBRID TRADING BOT v12.0 - FIXED
 - Upstox data fetching (indices + stocks)
 - DeepSeek AI analysis with advanced strategies
-- SINGLE-PHASE: Deep analysis only (Quick scan removed)
+- SINGLE-PHASE: Deep analysis only
 - Chart + Option chain combined analysis
 """
 
@@ -51,7 +51,7 @@ INDICES = {
 
 # STOCKS - Organized by Sector
 SELECTED_STOCKS = {
-    # Auto 🚗
+    # Auto
     "NSE_EQ|INE467B01029": "TATAMOTORS",
     "NSE_EQ|INE585B01010": "MARUTI",
     "NSE_EQ|INE208A01029": "ASHOKLEY",
@@ -59,7 +59,7 @@ SELECTED_STOCKS = {
     "NSE_EQ|INE101A01026": "M&M",
     "NSE_EQ|INE917I01010": "BAJAJ-AUTO",
     
-    # Banks 🏦
+    # Banks
     "NSE_EQ|INE040A01034": "HDFCBANK",
     "NSE_EQ|INE090A01021": "ICICIBANK",
     "NSE_EQ|INE062A01020": "SBIN",
@@ -67,38 +67,38 @@ SELECTED_STOCKS = {
     "NSE_EQ|INE238A01034": "AXISBANK",
     "NSE_EQ|INE237A01028": "KOTAKBANK",
     
-    # Metals 🏭
+    # Metals
     "NSE_EQ|INE155A01022": "TATASTEEL",
     "NSE_EQ|INE205A01025": "HINDALCO",
     "NSE_EQ|INE019A01038": "JSWSTEEL",
     
-    # Oil & Gas ⛽
+    # Oil & Gas
     "NSE_EQ|INE002A01018": "RELIANCE",
     "NSE_EQ|INE213A01029": "ONGC",
     "NSE_EQ|INE242A01010": "IOC",
     
-    # IT 💻
+    # IT
     "NSE_EQ|INE009A01021": "INFY",
     "NSE_EQ|INE075A01022": "WIPRO",
     "NSE_EQ|INE854D01024": "TCS",
     "NSE_EQ|INE047A01021": "HCLTECH",
     
-    # Pharma 💊
+    # Pharma
     "NSE_EQ|INE044A01036": "SUNPHARMA",
     "NSE_EQ|INE361B01024": "DIVISLAB",
     "NSE_EQ|INE089A01023": "DRREDDY",
     
-    # FMCG 🛒
+    # FMCG
     "NSE_EQ|INE154A01025": "ITC",
     "NSE_EQ|INE030A01027": "HUL",
     "NSE_EQ|INE216A01030": "BRITANNIA",
     
-    # Infra/Power ⚡
+    # Infra/Power
     "NSE_EQ|INE742F01042": "ADANIPORTS",
     "NSE_EQ|INE733E01010": "NTPC",
     "NSE_EQ|INE018A01030": "LT",
     
-    # Retail/Consumer 👕
+    # Retail/Consumer
     "NSE_EQ|INE280A01028": "TITAN",
     "NSE_EQ|INE849A01020": "TRENT",
     "NSE_EQ|INE021A01026": "ASIANPAINT",
@@ -108,13 +108,13 @@ SELECTED_STOCKS = {
     "NSE_EQ|INE296A01024": "BAJFINANCE"
 }
 
-# Analysis thresholds (DEEP ANALYSIS ONLY)
+# Analysis thresholds
 CONFIDENCE_MIN = 75
 SCORE_MIN = 90
 ALIGNMENT_MIN = 18
 
 SCAN_INTERVAL = 900  # 15 minutes
-OI_CACHE = {}  # Store previous OI
+OI_CACHE = {}
 
 @dataclass
 class OIData:
@@ -402,7 +402,7 @@ class ChartAnalyzer:
     
     @staticmethod
     def identify_market_structure(df: pd.DataFrame) -> Dict:
-        """Identify market structure (HH-HL, LH-LL, Sideways)"""
+        """Identify market structure"""
         try:
             if len(df) < 20:
                 return {"structure": "INSUFFICIENT", "bias": "NEUTRAL"}
@@ -435,7 +435,7 @@ class ChartAnalyzer:
     
     @staticmethod
     def calculate_support_resistance(df: pd.DataFrame) -> Dict:
-        """Calculate multi-touch support/resistance levels"""
+        """Calculate support/resistance levels"""
         try:
             if len(df) < 50:
                 current = df['close'].iloc[-1]
@@ -496,7 +496,7 @@ class ChartAnalyzer:
             }
 
 class AIAnalyzer:
-    """DeepSeek AI analysis - DEEP ANALYSIS ONLY"""
+    """DeepSeek AI analysis"""
     
     @staticmethod
     def extract_json(content: str) -> Optional[Dict]:
@@ -627,7 +627,7 @@ Reply JSON:
                 chart_score=analysis_dict['chart_score'],
                 option_score=analysis_dict['option_score'],
                 alignment_score=analysis_dict['alignment_score'],
-                total_score=analysis_dict.get('total_score', 
+                total_score=analysis_dict.get('total_score',
                     analysis_dict['chart_score'] + analysis_dict['option_score'] + analysis_dict['alignment_score']),
                 entry_price=analysis_dict.get('entry_price', spot_price),
                 stop_loss=analysis_dict.get('stop_loss', spot_price * 0.995),
@@ -651,20 +651,21 @@ Reply JSON:
             return None
 
 class TelegramNotifier:
-    """Telegram message sender"""
+    """Telegram message sender - FIXED"""
     
     def __init__(self):
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
     
     async def send_startup_message(self):
-        """Send bot startup notification"""
+        """Send bot startup notification - FIXED"""
         try:
+            sep = "=" * 40
             msg = f"""🔥 HYBRID TRADING BOT v12.0 - ACTIVE 🔥
 
-{'='*40}
+{sep}
 DATA SOURCE: Upstox API
 AI ENGINE: DeepSeek V3
-{'='*40}
+{sep}
 
 📊 Monitoring:
    • {len(INDICES)} Indices
@@ -672,23 +673,25 @@ AI ENGINE: DeepSeek V3
 
 ⏰ Scan Interval: 15 minutes
 
-{'='*40}
+{sep}
 SINGLE-PHASE DEEP ANALYSIS
-{'='*40}
+{sep}
 
 ✅ All instruments analyzed deeply
 ✅ Comprehensive scoring:
    - Chart analysis /50
    - Options analysis /50
+   - Alignment /25
+
 ✅ Filters:
    - Confidence ≥75%
    - Total Score ≥90/125
    - Alignment ≥18/25
 
-{'='*40}
+{sep}
 Status: 🟢 RUNNING
 Market: 9:15 AM - 3:30 PM IST
-{'='*40}"""
+{sep}"""
             
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
@@ -698,9 +701,9 @@ Market: 9:15 AM - 3:30 PM IST
         except Exception as e:
             logger.error(f"Startup message error: {e}")
     
-    async def send_alert(self, symbol: str, spot_price: float, analysis: DeepAnalysis, 
+    async def send_alert(self, symbol: str, spot_price: float, analysis: DeepAnalysis,
                         aggregate: AggregateOIAnalysis, expiry: str):
-        """Send trading alert"""
+        """Send trading alert - FIXED"""
         try:
             signal_map = {
                 "PE_BUY": ("🟢", "PE BUY (Bullish)"),
@@ -710,22 +713,23 @@ Market: 9:15 AM - 3:30 PM IST
             signal_emoji, signal_text = signal_map.get(analysis.opportunity, ("⚪", "WAIT"))
             
             ist_time = datetime.now(IST).strftime('%H:%M:%S')
+            sep = "=" * 40
             
             # Main alert
             alert = f"""🎯 TRADING SIGNAL - {symbol}
 
 {signal_emoji} {signal_text}
 
-{'='*40}
+{sep}
 CONFIDENCE: {analysis.confidence}%
 SCORE: {analysis.total_score}/125
    Chart: {analysis.chart_score}/50
    Options: {analysis.option_score}/50
    Alignment: {analysis.alignment_score}/25
 
-{'='*40}
+{sep}
 TRADE SETUP
-{'='*40}
+{sep}
 💰 Spot: ₹{spot_price:.2f}
 📍 Entry: ₹{analysis.entry_price:.2f}
 🛑 Stop Loss: ₹{analysis.stop_loss:.2f}
@@ -734,52 +738,52 @@ TRADE SETUP
 📊 Risk:Reward: {analysis.risk_reward}
 🎲 Strike: {analysis.recommended_strike}
 
-{'='*40}
+{sep}
 MARKET STRUCTURE
-{'='*40}
+{sep}
 {analysis.market_structure}
 
 Support: {', '.join([f"₹{s:.1f}" for s in analysis.support_levels[:2]])}
 Resistance: {', '.join([f"₹{r:.1f}" for r in analysis.resistance_levels[:2]])}
 
-{'='*40}
+{sep}
 OPTIONS DATA
-{'='*40}
+{sep}
 PCR: {aggregate.pcr:.2f}
 CE OI: {aggregate.ce_oi_change_pct:+.1f}% | Vol: {aggregate.ce_volume_change_pct:+.1f}%
 PE OI: {aggregate.pe_oi_change_pct:+.1f}% | Vol: {aggregate.pe_volume_change_pct:+.1f}%
 
-{'='*40}
+{sep}
 SIGNALS
-{'='*40}
+{sep}
 📊 Chart: {analysis.pattern_signal[:150]}
 
 ⛓️ OI Flow: {analysis.oi_flow_signal[:150]}
 
-{'='*40}
+{sep}
 SCENARIOS
-{'='*40}
+{sep}
 🟢 Bullish: {analysis.scenario_bullish[:150]}
 
 🔴 Bearish: {analysis.scenario_bearish[:150]}
 
-{'='*40}
+{sep}
 RISK FACTORS
-{'='*40}"""
+{sep}"""
             
             for i, risk in enumerate(analysis.risk_factors[:3], 1):
                 alert += f"\n⚠️ {risk[:100]}"
             
-            alert += f"\n\n{'='*40}\nMONITORING CHECKLIST\n{'='*40}"
+            alert += f"\n\n{sep}\nMONITORING CHECKLIST\n{sep}"
             
             for i, check in enumerate(analysis.monitoring_checklist[:3], 1):
                 alert += f"\n✓ {check[:100]}"
             
-            alert += f"\n\n{'='*40}"
+            alert += f"\n\n{sep}"
             alert += f"\n📅 Expiry: {expiry}"
             alert += f"\n⏰ Time: {ist_time} IST"
             alert += f"\n🤖 AI: DeepSeek V3 | v12.0"
-            alert += f"\n{'='*40}"
+            alert += f"\n{sep}"
             
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
@@ -997,7 +1001,7 @@ class HybridTradingBot:
         
         # Check credentials
         missing = []
-        for cred in ['UPSTOX_ACCESS_TOKEN', 'TELEGRAM_BOT_TOKEN', 
+        for cred in ['UPSTOX_ACCESS_TOKEN', 'TELEGRAM_BOT_TOKEN',
                      'TELEGRAM_CHAT_ID', 'DEEPSEEK_API_KEY']:
             if not globals().get(cred):
                 missing.append(cred)
@@ -1056,5 +1060,4 @@ if __name__ == "__main__":
         logger.info("\nShutdown (Ctrl+C)")
     except Exception as e:
         logger.error(f"\nCritical error: {e}")
-        logger.error(traceback.format_exc())  
-   - Alignment /25
+        logger.error(traceback.format_exc())
