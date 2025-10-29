@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-HYBRID TRADING BOT v11.0
+HYBRID TRADING BOT v12.0
 - Upstox data fetching (indices + stocks)
 - DeepSeek AI analysis with advanced strategies
-- Two-phase filtering: Quick scan → Deep analysis
+- SINGLE-PHASE: Deep analysis only (Quick scan removed)
 - Chart + Option chain combined analysis
 """
 
@@ -108,14 +108,10 @@ SELECTED_STOCKS = {
     "NSE_EQ|INE296A01024": "BAJFINANCE"
 }
 
-# Analysis thresholds
-PHASE1_CONFIDENCE_MIN = 70
-PHASE1_OI_DIVERGENCE_MIN = 2.5
-PHASE1_VOLUME_MIN = 25.0
-
-PHASE2_CONFIDENCE_MIN = 75
-PHASE2_SCORE_MIN = 90
-PHASE2_ALIGNMENT_MIN = 18
+# Analysis thresholds (DEEP ANALYSIS ONLY)
+CONFIDENCE_MIN = 75
+SCORE_MIN = 90
+ALIGNMENT_MIN = 18
 
 SCAN_INTERVAL = 900  # 15 minutes
 OI_CACHE = {}  # Store previous OI
@@ -146,16 +142,6 @@ class AggregateOIAnalysis:
     pcr: float
     overall_sentiment: str
     max_pain: float = 0.0
-
-@dataclass
-class QuickAnalysis:
-    opportunity: str
-    confidence: int
-    oi_divergence: float
-    volume_surge: float
-    pcr: float
-    passed_phase1: bool
-    reason: str
 
 @dataclass
 class DeepAnalysis:
@@ -510,7 +496,7 @@ class ChartAnalyzer:
             }
 
 class AIAnalyzer:
-    """DeepSeek AI analysis - Two phase"""
+    """DeepSeek AI analysis - DEEP ANALYSIS ONLY"""
     
     @staticmethod
     def extract_json(content: str) -> Optional[Dict]:
@@ -554,94 +540,9 @@ class AIAnalyzer:
             return None
     
     @staticmethod
-    def phase1_quick_scan(symbol: str, spot_price: float, aggregate: AggregateOIAnalysis) -> Optional[QuickAnalysis]:
-        """Phase 1: Quick analysis"""
-        try:
-            url = "https://api.deepseek.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            prompt = f"""Quick scan for {symbol} options.
-
-Spot: {spot_price:.2f}
-PCR: {aggregate.pcr:.2f}
-CE OI: {aggregate.ce_oi_change_pct:+.2f}%
-PE OI: {aggregate.pe_oi_change_pct:+.2f}%
-CE Vol: {aggregate.ce_volume_change_pct:+.2f}%
-PE Vol: {aggregate.pe_volume_change_pct:+.2f}%
-Sentiment: {aggregate.overall_sentiment}
-
-Reply JSON only:
-{{
-  "opportunity": "PE_BUY or CE_BUY or WAIT",
-  "confidence": 75,
-  "reason": "Brief reason"
-}}"""
-
-            payload = {
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": "Quick trader. Reply JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.2,
-                "max_tokens": 300
-            }
-            
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
-                return None
-            
-            result = response.json()
-            content = result['choices'][0]['message']['content'].strip()
-            
-            analysis_dict = AIAnalyzer.extract_json(content)
-            
-            if not analysis_dict:
-                return None
-            
-            opportunity = analysis_dict.get('opportunity', 'WAIT')
-            confidence = analysis_dict.get('confidence', 0)
-            
-            # Calculate metrics
-            oi_divergence = abs(aggregate.pe_oi_change_pct - aggregate.ce_oi_change_pct)
-            
-            if opportunity == "PE_BUY":
-                volume_surge = aggregate.pe_volume_change_pct
-            elif opportunity == "CE_BUY":
-                volume_surge = aggregate.ce_volume_change_pct
-            else:
-                volume_surge = 0
-            
-            # Phase 1 filter
-            passed = (
-                confidence >= PHASE1_CONFIDENCE_MIN and
-                oi_divergence >= PHASE1_OI_DIVERGENCE_MIN and
-                volume_surge >= PHASE1_VOLUME_MIN and
-                opportunity != "WAIT"
-            )
-            
-            return QuickAnalysis(
-                opportunity=opportunity,
-                confidence=confidence,
-                oi_divergence=oi_divergence,
-                volume_surge=volume_surge,
-                pcr=aggregate.pcr,
-                passed_phase1=passed,
-                reason=analysis_dict.get('reason', 'N/A')
-            )
-            
-        except Exception as e:
-            logger.error(f"Phase 1 error: {e}")
-            return None
-    
-    @staticmethod
-    def phase2_deep_analysis(symbol: str, spot_price: float, df: pd.DataFrame,
-                            aggregate: AggregateOIAnalysis, structure: Dict, sr_levels: Dict) -> Optional[DeepAnalysis]:
-        """Phase 2: Deep analysis"""
+    def deep_analysis(symbol: str, spot_price: float, df: pd.DataFrame,
+                     aggregate: AggregateOIAnalysis, structure: Dict, sr_levels: Dict) -> Optional[DeepAnalysis]:
+        """Deep analysis with comprehensive scoring"""
         try:
             url = "https://api.deepseek.com/v1/chat/completions"
             headers = {
@@ -670,7 +571,7 @@ Score /125:
 
 Reply JSON:
 {{
-  "opportunity": "PE_BUY or CE_BUY",
+  "opportunity": "PE_BUY or CE_BUY or WAIT",
   "confidence": 78,
   "chart_score": 40,
   "option_score": 42,
@@ -746,7 +647,7 @@ Reply JSON:
             )
             
         except Exception as e:
-            logger.error(f"Phase 2 error: {e}")
+            logger.error(f"Deep analysis error: {e}")
             return None
 
 class TelegramNotifier:
@@ -758,7 +659,7 @@ class TelegramNotifier:
     async def send_startup_message(self):
         """Send bot startup notification"""
         try:
-            msg = f"""🔥 HYBRID TRADING BOT v11.0 - ACTIVE 🔥
+            msg = f"""🔥 HYBRID TRADING BOT v12.0 - ACTIVE 🔥
 
 {'='*40}
 DATA SOURCE: Upstox API
@@ -772,25 +673,16 @@ AI ENGINE: DeepSeek V3
 ⏰ Scan Interval: 15 minutes
 
 {'='*40}
-TWO-PHASE ANALYSIS
+SINGLE-PHASE DEEP ANALYSIS
 {'='*40}
 
-PHASE 1: QUICK SCAN
-✅ All instruments (5 sec each)
-✅ Filters:
-   - Confidence ≥70%
-   - OI Divergence ≥2.5%
-   - Volume ≥25%
-
-PHASE 2: DEEP ANALYSIS
-✅ Promising only
-✅ Advanced analysis:
-   - Market structure
-   - Multi-touch S/R
-   - Confluence scoring
+✅ All instruments analyzed deeply
+✅ Comprehensive scoring:
+   - Chart analysis /50
+   - Options analysis /50
 ✅ Filters:
    - Confidence ≥75%
-   - Score ≥90/125
+   - Total Score ≥90/125
    - Alignment ≥18/25
 
 {'='*40}
@@ -886,7 +778,7 @@ RISK FACTORS
             alert += f"\n\n{'='*40}"
             alert += f"\n📅 Expiry: {expiry}"
             alert += f"\n⏰ Time: {ist_time} IST"
-            alert += f"\n🤖 AI: DeepSeek V3 | v11.0"
+            alert += f"\n🤖 AI: DeepSeek V3 | v12.0"
             alert += f"\n{'='*40}"
             
             await self.bot.send_message(
@@ -899,15 +791,13 @@ RISK FACTORS
         except Exception as e:
             logger.error(f"Alert error: {e}")
     
-    async def send_cycle_summary(self, phase1_count: int, phase1_passed: int, 
-                                 phase2_count: int, alerts_sent: int):
+    async def send_cycle_summary(self, total_scanned: int, alerts_sent: int):
         """Send scan cycle summary"""
         try:
             msg = f"""📊 SCAN CYCLE COMPLETE
 
-Phase 1: {phase1_passed}/{phase1_count} passed
-Phase 2: {phase2_count} analyzed
-Alerts: {alerts_sent} sent
+Deep Analysis: {total_scanned} instruments
+Alerts Sent: {alerts_sent}
 
 ⏰ Next scan in 15 minutes..."""
             
@@ -922,19 +812,17 @@ class HybridTradingBot:
     """Main bot orchestrator"""
     
     def __init__(self):
-        logger.info("Initializing Hybrid Trading Bot v11.0...")
+        logger.info("Initializing Hybrid Trading Bot v12.0...")
         self.fetcher = UpstoxDataFetcher()
         self.oi_analyzer = OIAnalyzer()
         self.chart_analyzer = ChartAnalyzer()
         self.ai_analyzer = AIAnalyzer()
         self.notifier = TelegramNotifier()
         
-        self.phase1_scanned = 0
-        self.phase1_passed = 0
-        self.phase2_analyzed = 0
+        self.total_scanned = 0
         self.alerts_sent = 0
         
-        logger.info("Bot v11.0 initialized!")
+        logger.info("Bot v12.0 initialized!")
     
     def is_market_open(self) -> bool:
         """Check if market is open"""
@@ -946,17 +834,18 @@ class HybridTradingBot:
         
         return "09:15" <= current_time <= "15:30"
     
-    async def phase1_quick_scan(self, instruments: Dict) -> List[Tuple[str, str, QuickAnalysis, AggregateOIAnalysis, str]]:
-        """Phase 1: Quick scan all instruments"""
-        promising = []
+    async def deep_scan_analysis(self, instruments: Dict):
+        """Deep analysis for all instruments"""
         
         logger.info("\n" + "="*70)
-        logger.info(f"PHASE 1: QUICK SCAN ({len(instruments)} instruments)")
+        logger.info(f"DEEP ANALYSIS SCAN ({len(instruments)} instruments)")
         logger.info("="*70)
+        
+        alerts_before = self.alerts_sent
         
         for idx, (key, info) in enumerate(instruments.items(), 1):
             try:
-                self.phase1_scanned += 1
+                self.total_scanned += 1
                 
                 if isinstance(info, dict) and 'name' in info:
                     symbol = info['name']
@@ -965,13 +854,15 @@ class HybridTradingBot:
                     symbol = info
                     expiry_day = 3
                 
-                logger.info(f"[{idx}/{len(instruments)}] Quick scan: {symbol}")
+                logger.info(f"\n[{idx}/{len(instruments)}] Analyzing: {symbol}")
                 
                 # Get spot price
                 spot_price = self.fetcher.get_spot_price(key)
                 if spot_price == 0:
                     logger.warning(f"{symbol}: No spot price")
                     continue
+                
+                logger.info(f"{symbol}: Spot ₹{spot_price:.2f}")
                 
                 # Get expiry
                 expiry = self.fetcher.get_next_expiry(key, expiry_day)
@@ -985,48 +876,16 @@ class HybridTradingBot:
                 # Parse OI data
                 oi_data = self.oi_analyzer.parse_option_chain(strikes, spot_price)
                 if not oi_data:
+                    logger.warning(f"{symbol}: No OI data")
                     continue
                 
                 # Get aggregate analysis
                 aggregate = self.oi_analyzer.get_aggregate_analysis(symbol, oi_data)
                 if not aggregate:
+                    logger.warning(f"{symbol}: No aggregate data")
                     continue
                 
-                # Quick AI analysis
-                quick = self.ai_analyzer.phase1_quick_scan(symbol, spot_price, aggregate)
-                
-                if quick and quick.passed_phase1:
-                    self.phase1_passed += 1
-                    promising.append((key, symbol, quick, aggregate, expiry))
-                    logger.info(f"✅ {symbol}: PASSED (Conf: {quick.confidence}%, Div: {quick.oi_divergence:.1f}%)")
-                else:
-                    logger.info(f"❌ {symbol}: Failed Phase 1")
-                
-                await asyncio.sleep(0.5)
-                
-            except Exception as e:
-                logger.error(f"Phase 1 error {key}: {e}")
-        
-        logger.info(f"\nPhase 1 Complete: {self.phase1_passed}/{self.phase1_scanned} passed")
-        
-        return promising
-    
-    async def phase2_deep_analysis(self, promising: List[Tuple[str, str, QuickAnalysis, AggregateOIAnalysis, str]]):
-        """Phase 2: Deep analysis on promising instruments"""
-        
-        if not promising:
-            logger.info("No instruments passed Phase 1")
-            return
-        
-        logger.info("\n" + "="*70)
-        logger.info(f"PHASE 2: DEEP ANALYSIS ({len(promising)} promising)")
-        logger.info("="*70)
-        
-        for idx, (key, symbol, quick, aggregate, expiry) in enumerate(promising, 1):
-            try:
-                self.phase2_analyzed += 1
-                
-                logger.info(f"\n[{idx}/{len(promising)}] Deep analysis: {symbol}")
+                logger.info(f"{symbol}: PCR={aggregate.pcr:.2f}, Sentiment={aggregate.overall_sentiment}")
                 
                 # Get candle data
                 df = self.fetcher.get_candle_data(key, symbol)
@@ -1034,36 +893,38 @@ class HybridTradingBot:
                     logger.warning(f"{symbol}: Insufficient chart data")
                     continue
                 
-                spot_price = df['close'].iloc[-1]
-                
                 # Chart analysis
                 structure = self.chart_analyzer.identify_market_structure(df)
                 sr_levels = self.chart_analyzer.calculate_support_resistance(df)
                 
-                logger.info(f"{symbol}: {structure['structure']} | {structure['bias']}")
+                logger.info(f"{symbol}: Structure={structure['structure']}, Bias={structure['bias']}")
                 
                 # Deep AI analysis
-                deep = self.ai_analyzer.phase2_deep_analysis(
+                deep = self.ai_analyzer.deep_analysis(
                     symbol, spot_price, df, aggregate, structure, sr_levels
                 )
                 
                 if not deep:
-                    logger.warning(f"{symbol}: No deep analysis")
+                    logger.warning(f"{symbol}: AI analysis failed")
                     continue
                 
-                logger.info(f"{symbol}: Score={deep.total_score}/125")
+                logger.info(f"{symbol}: AI Score={deep.total_score}/125, Confidence={deep.confidence}%")
                 
-                # Phase 2 filters
-                if deep.confidence < PHASE2_CONFIDENCE_MIN:
-                    logger.info(f"❌ {symbol}: Confidence {deep.confidence}% < {PHASE2_CONFIDENCE_MIN}%")
+                # Apply filters
+                if deep.opportunity == "WAIT":
+                    logger.info(f"❌ {symbol}: AI says WAIT")
                     continue
                 
-                if deep.total_score < PHASE2_SCORE_MIN:
-                    logger.info(f"❌ {symbol}: Score {deep.total_score} < {PHASE2_SCORE_MIN}")
+                if deep.confidence < CONFIDENCE_MIN:
+                    logger.info(f"❌ {symbol}: Confidence {deep.confidence}% < {CONFIDENCE_MIN}%")
                     continue
                 
-                if deep.alignment_score < PHASE2_ALIGNMENT_MIN:
-                    logger.info(f"❌ {symbol}: Alignment {deep.alignment_score} < {PHASE2_ALIGNMENT_MIN}")
+                if deep.total_score < SCORE_MIN:
+                    logger.info(f"❌ {symbol}: Score {deep.total_score} < {SCORE_MIN}")
+                    continue
+                
+                if deep.alignment_score < ALIGNMENT_MIN:
+                    logger.info(f"❌ {symbol}: Alignment {deep.alignment_score} < {ALIGNMENT_MIN}")
                     continue
                 
                 # Time filter (skip opening/closing)
@@ -1079,7 +940,7 @@ class HybridTradingBot:
                     logger.info(f"❌ {symbol}: Closing period")
                     continue
                 
-                logger.info(f"✅ {symbol}: PASSED Phase 2 - Sending alert!")
+                logger.info(f"✅ {symbol}: ALL FILTERS PASSED - Sending alert!")
                 
                 # Send alert
                 await self.notifier.send_alert(symbol, spot_price, deep, aggregate, expiry)
@@ -1089,8 +950,19 @@ class HybridTradingBot:
                 await asyncio.sleep(2)
                 
             except Exception as e:
-                logger.error(f"Phase 2 error {symbol}: {e}")
+                logger.error(f"Deep scan error {key}: {e}")
                 logger.error(traceback.format_exc())
+            
+            # Small delay between instruments
+            await asyncio.sleep(1)
+        
+        alerts_this_cycle = self.alerts_sent - alerts_before
+        
+        logger.info(f"\n{'='*70}")
+        logger.info(f"SCAN COMPLETE: {self.total_scanned} analyzed, {alerts_this_cycle} alerts sent")
+        logger.info(f"{'='*70}\n")
+        
+        return alerts_this_cycle
     
     async def run_scan_cycle(self):
         """Run complete scan cycle"""
@@ -1098,39 +970,29 @@ class HybridTradingBot:
         logger.info(f"SCAN CYCLE START - {datetime.now(IST).strftime('%H:%M:%S IST')}")
         logger.info(f"{'='*70}")
         
-        # Reset counters
-        self.phase1_scanned = 0
-        self.phase1_passed = 0
-        self.phase2_analyzed = 0
-        alerts_before = self.alerts_sent
+        # Reset counter
+        scan_count_before = self.total_scanned
         
         # Combine all instruments
         all_instruments = {**INDICES, **SELECTED_STOCKS}
         
-        # Phase 1: Quick scan
-        promising = await self.phase1_quick_scan(all_instruments)
-        
-        # Phase 2: Deep analysis
-        await self.phase2_deep_analysis(promising)
+        # Deep analysis on all
+        alerts_sent = await self.deep_scan_analysis(all_instruments)
         
         # Send summary
-        alerts_this_cycle = self.alerts_sent - alerts_before
-        await self.notifier.send_cycle_summary(
-            self.phase1_scanned, self.phase1_passed,
-            self.phase2_analyzed, alerts_this_cycle
-        )
+        instruments_scanned = self.total_scanned - scan_count_before
+        await self.notifier.send_cycle_summary(instruments_scanned, alerts_sent)
         
         logger.info(f"\n{'='*70}")
         logger.info(f"CYCLE COMPLETE")
-        logger.info(f"Phase 1: {self.phase1_passed}/{self.phase1_scanned}")
-        logger.info(f"Phase 2: {self.phase2_analyzed}")
-        logger.info(f"Alerts: {alerts_this_cycle}")
+        logger.info(f"Analyzed: {instruments_scanned}")
+        logger.info(f"Alerts: {alerts_sent}")
         logger.info(f"{'='*70}\n")
     
     async def run(self):
         """Main bot loop"""
         logger.info("="*70)
-        logger.info("HYBRID TRADING BOT v11.0")
+        logger.info("HYBRID TRADING BOT v12.0")
         logger.info("="*70)
         
         # Check credentials
@@ -1148,7 +1010,7 @@ class HybridTradingBot:
         await self.notifier.send_startup_message()
         
         logger.info("="*70)
-        logger.info("Bot RUNNING - Hybrid two-phase analysis")
+        logger.info("Bot RUNNING - Single-phase deep analysis")
         logger.info("="*70)
         
         while True:
@@ -1184,8 +1046,8 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("="*70)
-    logger.info("HYBRID TRADING BOT v11.0 STARTING...")
-    logger.info("Upstox + DeepSeek AI + Two-Phase Filter")
+    logger.info("HYBRID TRADING BOT v12.0 STARTING...")
+    logger.info("Upstox + DeepSeek AI + Deep Analysis Only")
     logger.info("="*70)
     
     try:
@@ -1194,4 +1056,5 @@ if __name__ == "__main__":
         logger.info("\nShutdown (Ctrl+C)")
     except Exception as e:
         logger.error(f"\nCritical error: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(traceback.format_exc())  
+   - Alignment /25
