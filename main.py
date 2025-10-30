@@ -564,90 +564,157 @@ class ChartGenerator:
     @staticmethod
     def create_chart(mtf_data: MultiTimeframeData, symbol: str, spot_price: float,
                     analysis: DeepAnalysis, aggregate: AggregateOIAnalysis) -> io.BytesIO:
-        """Create professional multi-TF chart"""
+        """Create professional multi-TF chart with CLEAN candlesticks"""
         try:
             # Use 15min TF for main chart (100 candles)
-            df_plot = mtf_data.df_15m.tail(100).copy()
+            df_plot = mtf_data.df_15m.tail(100).copy().reset_index(drop=True)
             
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), 
                                           gridspec_kw={'height_ratios': [3, 1]})
             
-            # Price chart (15min candles)
-            for idx, row in df_plot.iterrows():
-                color = 'green' if row['close'] > row['open'] else 'red'
-                ax1.plot([idx, idx], [row['low'], row['high']], color=color, linewidth=1)
+            # 🔥 CLEAN CANDLESTICK PLOTTING (Sequential, no gaps)
+            for i in range(len(df_plot)):
+                row = df_plot.iloc[i]
+                
+                # Candlestick color
+                color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'  # TradingView colors
+                edge_color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'
+                
+                # Wick (high-low line)
+                ax1.plot([i, i], [row['low'], row['high']], 
+                        color=edge_color, linewidth=1.2, solid_capstyle='round')
+                
+                # Body (open-close rectangle)
+                body_height = abs(row['close'] - row['open'])
+                body_bottom = min(row['open'], row['close'])
+                
+                # Width: 0.7 for thick candles like TradingView
+                candle_width = 0.7
+                
                 ax1.add_patch(Rectangle(
-                    (idx, min(row['open'], row['close'])),
-                    timedelta(minutes=15),
-                    abs(row['close'] - row['open']),
-                    facecolor=color, alpha=0.7
+                    (i - candle_width/2, body_bottom),
+                    candle_width,
+                    body_height if body_height > 0 else row['high'] * 0.0001,  # Doji fix
+                    facecolor=color,
+                    edgecolor=edge_color,
+                    linewidth=0.8,
+                    alpha=0.9
                 ))
             
-            # Support levels
+            # 🎯 SUPPORT LEVELS (mapped to sequential indices)
             for support in analysis.support_levels[:3]:
-                ax1.axhline(y=support, color='green', linestyle='--', linewidth=1.5, alpha=0.6)
-                ax1.text(df_plot.index[-1], support, f'  S: {support:.1f}', 
-                        va='center', color='green', fontweight='bold')
+                ax1.axhline(y=support, color='#26a69a', linestyle='--', 
+                           linewidth=1.5, alpha=0.7, zorder=1)
+                ax1.text(len(df_plot) - 1, support, f'  S: ₹{support:.1f}', 
+                        va='center', color='#26a69a', fontweight='bold', fontsize=9,
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='#26a69a'))
             
-            # Resistance levels
+            # 🎯 RESISTANCE LEVELS
             for resistance in analysis.resistance_levels[:3]:
-                ax1.axhline(y=resistance, color='red', linestyle='--', linewidth=1.5, alpha=0.6)
-                ax1.text(df_plot.index[-1], resistance, f'  R: {resistance:.1f}', 
-                        va='center', color='red', fontweight='bold')
+                ax1.axhline(y=resistance, color='#ef5350', linestyle='--', 
+                           linewidth=1.5, alpha=0.7, zorder=1)
+                ax1.text(len(df_plot) - 1, resistance, f'  R: ₹{resistance:.1f}', 
+                        va='center', color='#ef5350', fontweight='bold', fontsize=9,
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='#ef5350'))
             
-            # Current price
-            ax1.axhline(y=spot_price, color='blue', linestyle='-', linewidth=2)
-            ax1.text(df_plot.index[-1], spot_price, f'  CMP: {spot_price:.1f}', 
-                    va='center', color='blue', fontweight='bold', fontsize=10)
+            # 🎯 CURRENT PRICE LINE
+            ax1.axhline(y=spot_price, color='#2962ff', linestyle='-', 
+                       linewidth=2.5, alpha=0.9, zorder=2)
+            ax1.text(len(df_plot) - 1, spot_price, f'  CMP: ₹{spot_price:.1f}', 
+                    va='center', color='white', fontweight='bold', fontsize=10,
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor='#2962ff', alpha=0.9, edgecolor='#2962ff'))
             
-            # Entry, SL, Targets
+            # 🎯 ENTRY, SL, TARGETS
             if analysis.opportunity != "WAIT":
-                ax1.axhline(y=analysis.entry_price, color='orange', linestyle=':', linewidth=1.5)
-                ax1.axhline(y=analysis.stop_loss, color='red', linestyle=':', linewidth=1.5)
-                ax1.axhline(y=analysis.target_1, color='green', linestyle=':', linewidth=1.5)
-                ax1.axhline(y=analysis.target_2, color='darkgreen', linestyle=':', linewidth=1.5)
+                # Entry
+                ax1.axhline(y=analysis.entry_price, color='#ff9800', 
+                           linestyle=':', linewidth=2, alpha=0.8, zorder=2)
+                ax1.text(0, analysis.entry_price, f'Entry: ₹{analysis.entry_price:.1f}  ', 
+                        va='center', ha='right', color='#ff9800', fontweight='bold', fontsize=8)
+                
+                # Stop Loss
+                ax1.axhline(y=analysis.stop_loss, color='#f44336', 
+                           linestyle=':', linewidth=2, alpha=0.8, zorder=2)
+                ax1.text(0, analysis.stop_loss, f'SL: ₹{analysis.stop_loss:.1f}  ', 
+                        va='center', ha='right', color='#f44336', fontweight='bold', fontsize=8)
+                
+                # Target 1
+                ax1.axhline(y=analysis.target_1, color='#4caf50', 
+                           linestyle=':', linewidth=2, alpha=0.8, zorder=2)
+                ax1.text(0, analysis.target_1, f'T1: ₹{analysis.target_1:.1f}  ', 
+                        va='center', ha='right', color='#4caf50', fontweight='bold', fontsize=8)
+                
+                # Target 2
+                ax1.axhline(y=analysis.target_2, color='#1b5e20', 
+                           linestyle=':', linewidth=2, alpha=0.8, zorder=2)
+                ax1.text(0, analysis.target_2, f'T2: ₹{analysis.target_2:.1f}  ', 
+                        va='center', ha='right', color='#1b5e20', fontweight='bold', fontsize=8)
             
-            # Title with multi-TF info
-            title = f'{symbol} | 15min Chart | 1h:{analysis.tf_1h_trend} | Score:{analysis.total_score}/125'
-            ax1.set_title(title, fontsize=14, fontweight='bold')
-            ax1.set_ylabel('Price', fontsize=12)
-            ax1.grid(True, alpha=0.3)
-            ax1.legend(['Price', 'Support', 'Resistance', 'Current'], loc='upper left')
+            # 🎨 CHART STYLING
+            title = f'{symbol} | 15min Chart | 1H:{analysis.tf_1h_trend} | Score:{analysis.total_score}/125'
+            ax1.set_title(title, fontsize=14, fontweight='bold', pad=15)
+            ax1.set_ylabel('Price (₹)', fontsize=12, fontweight='bold')
+            ax1.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
+            ax1.set_facecolor('#fafafa')
             
-            # Volume chart
-            colors = ['green' if df_plot.loc[idx, 'close'] > df_plot.loc[idx, 'open'] else 'red' 
-                     for idx in df_plot.index]
-            ax2.bar(df_plot.index, df_plot['volume'], color=colors, alpha=0.6)
-            ax2.set_ylabel('Volume', fontsize=12)
-            ax2.set_xlabel('Time (15min TF)', fontsize=12)
-            ax2.grid(True, alpha=0.3)
+            # Remove x-axis datetime labels (sequential only)
+            ax1.set_xticks([])
             
-            # Add multi-TF info box
+            # Add candle count label
+            ax1.text(0.02, 0.02, f'{len(df_plot)} Candles', 
+                    transform=ax1.transAxes, fontsize=8, color='gray',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            # 📊 VOLUME CHART (Sequential bars)
+            colors = ['#26a69a' if df_plot.iloc[i]['close'] >= df_plot.iloc[i]['open'] else '#ef5350' 
+                     for i in range(len(df_plot))]
+            
+            ax2.bar(range(len(df_plot)), df_plot['volume'], 
+                   color=colors, alpha=0.7, width=0.8, edgecolor='none')
+            
+            ax2.set_ylabel('Volume', fontsize=12, fontweight='bold')
+            ax2.set_xlabel('Candlestick Index (Sequential)', fontsize=12, fontweight='bold')
+            ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
+            ax2.set_facecolor('#fafafa')
+            ax2.set_xlim(-1, len(df_plot))
+            
+            # 📝 MULTI-TF INFO BOX (Professional styling)
             signal_emoji = "🟢" if analysis.opportunity == "PE_BUY" else "🔴" if analysis.opportunity == "CE_BUY" else "⚪"
+            
             info_text = f"""
-{signal_emoji} Signal: {analysis.opportunity}
-Confidence: {analysis.confidence}%
+{signal_emoji} {analysis.opportunity}  |  Confidence: {analysis.confidence}%
 TF Alignment: {analysis.tf_alignment}
 
-1H Trend: {analysis.tf_1h_trend}
-15M Pattern: {analysis.tf_15m_pattern}
-5M Entry: ₹{analysis.tf_5m_entry:.1f}
+─────────────────────────
+1H: {analysis.tf_1h_trend}
+15M: {analysis.tf_15m_pattern[:30]}...
+5M: ₹{analysis.tf_5m_entry:.1f}
 
+─────────────────────────
 PCR: {aggregate.pcr:.2f} | {aggregate.overall_sentiment}
-Entry: {analysis.entry_price:.1f} | SL: {analysis.stop_loss:.1f}
-T1: {analysis.target_1:.1f} | T2: {analysis.target_2:.1f}
+Entry: ₹{analysis.entry_price:.1f} | SL: ₹{analysis.stop_loss:.1f}
+T1: ₹{analysis.target_1:.1f} | T2: ₹{analysis.target_2:.1f}
 RR: {analysis.risk_reward}
 """
+            
+            # Info box positioning (top-left corner)
             ax1.text(0.02, 0.98, info_text.strip(), 
                     transform=ax1.transAxes,
-                    fontsize=9, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                    fontsize=9, 
+                    verticalalignment='top',
+                    family='monospace',
+                    bbox=dict(boxstyle='round,pad=0.8', 
+                             facecolor='white', 
+                             alpha=0.95,
+                             edgecolor='#424242',
+                             linewidth=2))
             
             plt.tight_layout()
             
             # Save to bytes
             buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            plt.savefig(buf, format='png', dpi=120, bbox_inches='tight', 
+                       facecolor='white', edgecolor='none')
             buf.seek(0)
             plt.close(fig)
             
@@ -655,6 +722,7 @@ RR: {analysis.risk_reward}
             
         except Exception as e:
             logger.error(f"Chart generation error: {e}")
+            logger.error(traceback.format_exc())
             return None
 
 class OIAnalyzer:
