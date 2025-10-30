@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-HYBRID TRADING BOT v12.0 - WITH REDIS OI TRACKING
-- Upstox data fetching (indices + stocks)
-- DeepSeek AI analysis with advanced strategies
-- Redis OI storage and comparison (24h expiry)
-- SINGLE-PHASE: Deep analysis only
-- Chart + Option chain combined analysis
+HYBRID TRADING BOT v12.0 - CORRECTED VERSION
+- Fixed ISINs for PAGEIND, LICHSGFIN, BAJAJFINSV
+- Redis OI tracking with 24h expiry
+- Chart + Option chain analysis
+- PNG chart alerts added
+- Comprehensive AI strategies
 """
 
 import os
@@ -54,17 +54,17 @@ IST = pytz.timezone('Asia/Kolkata')
 # Redis expiry: 24 hours
 REDIS_EXPIRY = 86400
 
-# INDICES - 4 Selected
+# ✅ CORRECTED INDICES - All 4 with proper formats
 INDICES = {
     "NSE_INDEX|Nifty 50": {"name": "NIFTY 50", "expiry_day": 1},
     "NSE_INDEX|Nifty Bank": {"name": "BANK NIFTY", "expiry_day": 2},
-    "NSE_INDEX|Nifty Midcap Select": {"name": "MIDCAP NIFTY", "expiry_day": 0},
-    "NSE_INDEX|Sensex": {"name": "SENSEX", "expiry_day": 4}
+    "NSE_INDEX|NIFTY MID SELECT": {"name": "MIDCAP NIFTY", "expiry_day": 0},  # ✅ CORRECTED
+    "BSE_INDEX|SENSEX": {"name": "SENSEX", "expiry_day": 4}  # ✅ CORRECTED
 }
 
-# STOCKS - Organized by Sector
+# ✅ CORRECTED STOCKS - Fixed ISINs
 SELECTED_STOCKS = {
-    # Auto
+    # Auto 🚗
     "NSE_EQ|INE467B01029": "TATAMOTORS",
     "NSE_EQ|INE585B01010": "MARUTI",
     "NSE_EQ|INE208A01029": "ASHOKLEY",
@@ -72,7 +72,7 @@ SELECTED_STOCKS = {
     "NSE_EQ|INE101A01026": "M&M",
     "NSE_EQ|INE917I01010": "BAJAJ-AUTO",
     
-    # Banks
+    # Banks 🏦
     "NSE_EQ|INE040A01034": "HDFCBANK",
     "NSE_EQ|INE090A01021": "ICICIBANK",
     "NSE_EQ|INE062A01020": "SBIN",
@@ -80,45 +80,53 @@ SELECTED_STOCKS = {
     "NSE_EQ|INE238A01034": "AXISBANK",
     "NSE_EQ|INE237A01028": "KOTAKBANK",
     
-    # Metals
+    # Metals 🏭
     "NSE_EQ|INE155A01022": "TATASTEEL",
     "NSE_EQ|INE205A01025": "HINDALCO",
     "NSE_EQ|INE019A01038": "JSWSTEEL",
     
-    # Oil & Gas
+    # Oil & Gas ⛽
     "NSE_EQ|INE002A01018": "RELIANCE",
     "NSE_EQ|INE213A01029": "ONGC",
     "NSE_EQ|INE242A01010": "IOC",
     
-    # IT
+    # IT 💻
     "NSE_EQ|INE009A01021": "INFY",
     "NSE_EQ|INE075A01022": "WIPRO",
     "NSE_EQ|INE854D01024": "TCS",
     "NSE_EQ|INE047A01021": "HCLTECH",
     
-    # Pharma
+    # Pharma 💊
     "NSE_EQ|INE044A01036": "SUNPHARMA",
     "NSE_EQ|INE361B01024": "DIVISLAB",
     "NSE_EQ|INE089A01023": "DRREDDY",
     
-    # FMCG
+    # FMCG 🛒
     "NSE_EQ|INE154A01025": "ITC",
     "NSE_EQ|INE030A01027": "HUL",
     "NSE_EQ|INE216A01030": "BRITANNIA",
     
-    # Infra/Power
+    # Infra/Power ⚡
     "NSE_EQ|INE742F01042": "ADANIPORTS",
     "NSE_EQ|INE733E01010": "NTPC",
     "NSE_EQ|INE018A01030": "LT",
     
-    # Retail/Consumer
+    # Retail/Consumer 👕
     "NSE_EQ|INE280A01028": "TITAN",
+    "NSE_EQ|INE797F01012": "JUBLFOOD",
     "NSE_EQ|INE849A01020": "TRENT",
     "NSE_EQ|INE021A01026": "ASIANPAINT",
+    "NSE_EQ|INE761H01022": "PAGEIND",  # ✅ CORRECTED ISIN
     
-    # Others
+    # Insurance 🛡️
+    "NSE_EQ|INE860A01027": "HDFCLIFE",
+    "NSE_EQ|INE123W01016": "SBILIFE",
+    "NSE_EQ|INE115A01026": "LICHSGFIN",  # ✅ CORRECTED ISIN
+    
+    # Others 📱
     "NSE_EQ|INE397D01024": "BHARTIARTL",
-    "NSE_EQ|INE296A01024": "BAJFINANCE"
+    "NSE_EQ|INE918I01026": "BAJAJFINSV",  # ✅ CORRECTED - Bajaj Finserv
+    "NSE_EQ|INE758E01017": "JIOFIN"
 }
 
 # Analysis thresholds
@@ -241,7 +249,6 @@ class RedisCache:
         """Compare current OI with cached data and return aggregate analysis"""
         try:
             if not self.redis_client or not self.connected:
-                # Return analysis without comparison
                 return self._calculate_aggregate_without_cache(current_oi)
             
             key = f"oi_data:{symbol}"
@@ -254,10 +261,6 @@ class RedisCache:
             old_data = json.loads(cached)
             old_strikes = {s['strike']: s for s in old_data['strikes']}
             previous_price = old_data.get('spot_price', current_price)
-            
-            # Calculate price change
-            price_change = current_price - previous_price
-            price_direction = "UP" if price_change > 0 else "DOWN" if price_change < 0 else "FLAT"
             
             # Calculate old totals
             total_ce_oi_old = sum(s['ce_oi'] for s in old_data['strikes'])
@@ -466,6 +469,98 @@ class UpstoxDataFetcher:
         
         return df_15m
 
+class ChartGenerator:
+    """Generate PNG chart with technical analysis"""
+    
+    @staticmethod
+    def create_chart(df: pd.DataFrame, symbol: str, spot_price: float,
+                    analysis: DeepAnalysis, aggregate: AggregateOIAnalysis) -> io.BytesIO:
+        """Create professional chart with annotations"""
+        try:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), 
+                                          gridspec_kw={'height_ratios': [3, 1]})
+            
+            # Chart data - last 100 candles
+            df_plot = df.tail(100).copy()
+            
+            # Price chart
+            for idx, row in df_plot.iterrows():
+                color = 'green' if row['close'] > row['open'] else 'red'
+                ax1.plot([idx, idx], [row['low'], row['high']], color=color, linewidth=1)
+                ax1.add_patch(Rectangle(
+                    (idx, min(row['open'], row['close'])),
+                    timedelta(minutes=15),
+                    abs(row['close'] - row['open']),
+                    facecolor=color, alpha=0.7
+                ))
+            
+            # Support levels
+            for support in analysis.support_levels[:3]:
+                ax1.axhline(y=support, color='green', linestyle='--', linewidth=1.5, alpha=0.6)
+                ax1.text(df_plot.index[-1], support, f'  S: {support:.1f}', 
+                        va='center', color='green', fontweight='bold')
+            
+            # Resistance levels
+            for resistance in analysis.resistance_levels[:3]:
+                ax1.axhline(y=resistance, color='red', linestyle='--', linewidth=1.5, alpha=0.6)
+                ax1.text(df_plot.index[-1], resistance, f'  R: {resistance:.1f}', 
+                        va='center', color='red', fontweight='bold')
+            
+            # Current price
+            ax1.axhline(y=spot_price, color='blue', linestyle='-', linewidth=2)
+            ax1.text(df_plot.index[-1], spot_price, f'  CMP: {spot_price:.1f}', 
+                    va='center', color='blue', fontweight='bold', fontsize=10)
+            
+            # Entry, SL, Targets
+            if analysis.opportunity != "WAIT":
+                ax1.axhline(y=analysis.entry_price, color='orange', linestyle=':', linewidth=1.5)
+                ax1.axhline(y=analysis.stop_loss, color='red', linestyle=':', linewidth=1.5)
+                ax1.axhline(y=analysis.target_1, color='green', linestyle=':', linewidth=1.5)
+                ax1.axhline(y=analysis.target_2, color='darkgreen', linestyle=':', linewidth=1.5)
+            
+            ax1.set_title(f'{symbol} | {analysis.market_structure} | Score: {analysis.total_score}/125', 
+                         fontsize=14, fontweight='bold')
+            ax1.set_ylabel('Price', fontsize=12)
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(['Price', 'Support', 'Resistance', 'Current'], loc='upper left')
+            
+            # Volume chart
+            colors = ['green' if df_plot.loc[idx, 'close'] > df_plot.loc[idx, 'open'] else 'red' 
+                     for idx in df_plot.index]
+            ax2.bar(df_plot.index, df_plot['volume'], color=colors, alpha=0.6)
+            ax2.set_ylabel('Volume', fontsize=12)
+            ax2.set_xlabel('Time', fontsize=12)
+            ax2.grid(True, alpha=0.3)
+            
+            # Add info box
+            signal_emoji = "🟢" if analysis.opportunity == "PE_BUY" else "🔴" if analysis.opportunity == "CE_BUY" else "⚪"
+            info_text = f"""
+{signal_emoji} Signal: {analysis.opportunity}
+Confidence: {analysis.confidence}%
+PCR: {aggregate.pcr:.2f} | Sentiment: {aggregate.overall_sentiment}
+Entry: {analysis.entry_price:.1f} | SL: {analysis.stop_loss:.1f}
+T1: {analysis.target_1:.1f} | T2: {analysis.target_2:.1f}
+RR: {analysis.risk_reward}
+"""
+            ax1.text(0.02, 0.98, info_text.strip(), 
+                    transform=ax1.transAxes,
+                    fontsize=9, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            
+            plt.tight_layout()
+            
+            # Save to bytes
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            buf.seek(0)
+            plt.close(fig)
+            
+            return buf
+            
+        except Exception as e:
+            logger.error(f"Chart generation error: {e}")
+            return None
+
 class OIAnalyzer:
     """Option chain analysis with Redis tracking"""
     
@@ -509,11 +604,11 @@ class OIAnalyzer:
         return oi_list
 
 class ChartAnalyzer:
-    """Advanced chart pattern analysis"""
+    """Advanced chart pattern analysis with your strategies"""
     
     @staticmethod
     def identify_market_structure(df: pd.DataFrame) -> Dict:
-        """Identify market structure"""
+        """Identify market structure - HH/HL (bullish) or LH/LL (bearish)"""
         try:
             if len(df) < 20:
                 return {"structure": "INSUFFICIENT", "bias": "NEUTRAL"}
@@ -546,7 +641,7 @@ class ChartAnalyzer:
     
     @staticmethod
     def calculate_support_resistance(df: pd.DataFrame) -> Dict:
-        """Calculate support/resistance levels"""
+        """Calculate support/resistance with minimum 2-3 tests"""
         try:
             if len(df) < 50:
                 current = df['close'].iloc[-1]
@@ -607,7 +702,7 @@ class ChartAnalyzer:
             }
 
 class AIAnalyzer:
-    """DeepSeek AI analysis"""
+    """DeepSeek AI with comprehensive chart + option strategies"""
     
     @staticmethod
     def extract_json(content: str) -> Optional[Dict]:
@@ -653,7 +748,7 @@ class AIAnalyzer:
     @staticmethod
     def deep_analysis(symbol: str, spot_price: float, df: pd.DataFrame,
                      aggregate: AggregateOIAnalysis, structure: Dict, sr_levels: Dict) -> Optional[DeepAnalysis]:
-        """Deep analysis with comprehensive scoring"""
+        """Deep analysis with YOUR comprehensive strategies"""
         try:
             url = "https://api.deepseek.com/v1/chat/completions"
             headers = {
@@ -661,29 +756,70 @@ class AIAnalyzer:
                 "Content-Type": "application/json"
             }
             
-            prompt = f"""DEEP analysis for {symbol} F&O.
+            # Prepare candle data for AI
+            recent_candles = df.tail(50).to_dict('records')
+            
+            prompt = f"""You are an expert F&O price action trader. Analyze {symbol} for actionable setups.
 
-Spot: {spot_price:.2f}
+SPOT PRICE: ₹{spot_price:.2f}
 
-STRUCTURE: {structure['structure']} | {structure['bias']}
+CHART STRUCTURE:
+- Structure: {structure['structure']} | Bias: {structure['bias']}
+- Support: {', '.join([f"₹{s:.0f}" for s in sr_levels['supports'][:3]])}
+- Resistance: {', '.join([f"₹{r:.0f}" for r in sr_levels['resistances'][:3]])}
 
-SUPPORT: {', '.join([f"{s:.0f}" for s in sr_levels['supports'][:3]])}
-RESISTANCE: {', '.join([f"{r:.0f}" for r in sr_levels['resistances'][:3]])}
+OPTIONS DATA (Redis Tracked):
+- PCR: {aggregate.pcr:.2f}
+- CE OI Change: {aggregate.ce_oi_change_pct:+.2f}% | Volume: {aggregate.ce_volume_change_pct:+.2f}%
+- PE OI Change: {aggregate.pe_oi_change_pct:+.2f}% | Volume: {aggregate.pe_volume_change_pct:+.2f}%
+- Sentiment: {aggregate.overall_sentiment}
 
-OPTIONS:
-PCR: {aggregate.pcr:.2f}
-CE: {aggregate.ce_oi_change_pct:+.2f}% | Vol: {aggregate.ce_volume_change_pct:+.2f}%
-PE: {aggregate.pe_oi_change_pct:+.2f}% | Vol: {aggregate.pe_volume_change_pct:+.2f}%
-Sentiment: {aggregate.overall_sentiment}
+ANALYSIS REQUIRED:
+1. TREND & STRUCTURE
+   - Overall trend strength
+   - Break of structure (BOS) detected?
+   - Higher highs/lows OR lower highs/lows?
 
-Score /125:
-- Chart: /50
-- Options: /50
-- Alignment: /25
+2. SUPPORT/RESISTANCE
+   - Key levels tested multiple times
+   - Price near S/R?
+   - Breakout/breakdown imminent?
 
-Reply JSON:
+3. CHART PATTERNS
+   - Continuation (flags, pennants, triangles)
+   - Reversal (H&S, double top/bottom)
+   - Pattern target calculation
+
+4. CANDLESTICK PATTERNS
+   - Last 20-30 candles focus
+   - Doji, hammer, engulfing patterns
+   - Confirmation status
+
+5. OPTION CHAIN INSIGHTS
+   - PCR analysis (>1.3 bullish, <0.7 bearish)
+   - OI buildup direction
+   - Volume vs OI correlation
+   - Aggressive call/put writing
+
+6. TRADE SETUP (if valid)
+   - Type: Breakout/Reversal/Continuation
+   - Entry trigger with reasoning
+   - Stop loss below/above key level
+   - 2 targets with risk-reward min 1:2
+
+7. RISK FACTORS
+   - What invalidates setup?
+   - Nearby major S/R blocking?
+   - Choppy/unclear action?
+
+SCORING (Total /125):
+- Chart Analysis: /50 (trend, structure, patterns, candles)
+- Options Analysis: /50 (PCR, OI flow, sentiment, volume)
+- Alignment Score: /25 (chart + options alignment)
+
+Reply ONLY JSON:
 {{
-  "opportunity": "PE_BUY or CE_BUY or WAIT",
+  "opportunity": "PE_BUY" or "CE_BUY" or "WAIT",
   "confidence": 78,
   "chart_score": 40,
   "option_score": 42,
@@ -695,21 +831,23 @@ Reply JSON:
   "target_2": {spot_price * 1.02:.2f},
   "risk_reward": "1:2",
   "recommended_strike": {int(spot_price)},
-  "pattern_signal": "Pattern detail",
-  "oi_flow_signal": "OI flow detail",
+  "pattern_signal": "Detailed chart pattern/structure explanation",
+  "oi_flow_signal": "Detailed OI flow and option chain explanation",
   "market_structure": "{structure['structure']}",
   "support_levels": {sr_levels['supports'][:2]},
   "resistance_levels": {sr_levels['resistances'][:2]},
-  "scenario_bullish": "If breaks X",
-  "scenario_bearish": "If breaks Y",
-  "risk_factors": ["Risk1", "Risk2"],
-  "monitoring_checklist": ["Check1", "Check2"]
-}}"""
+  "scenario_bullish": "If price breaks X level, expect Y move",
+  "scenario_bearish": "If price breaks A level, expect B move",
+  "risk_factors": ["Risk1", "Risk2", "Risk3"],
+  "monitoring_checklist": ["Check1", "Check2", "Check3"]
+}}
+
+Be brutally honest. If setup unclear, say "WAIT"."""
 
             payload = {
                 "model": "deepseek-chat",
                 "messages": [
-                    {"role": "system", "content": "Expert F&O trader. Reply JSON only with detailed analysis."},
+                    {"role": "system", "content": "Expert F&O trader with deep chart + option analysis skills. Reply JSON only."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.3,
@@ -763,24 +901,33 @@ Reply JSON:
             return None
 
 class TelegramNotifier:
-    """Telegram message sender with Redis status"""
+    """Telegram with TEXT + PNG CHART alerts"""
     
     def __init__(self, redis_connected: bool):
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
         self.redis_connected = redis_connected
     
     async def send_startup_message(self):
-        """Send bot startup notification with Redis status"""
+        """Send bot startup notification"""
         try:
             redis_status = "🟢 Connected" if self.redis_connected else "🔴 Not Connected"
             redis_note = "(OI tracking enabled)" if self.redis_connected else "(OI tracking disabled)"
             
             sep = "=" * 40
-            msg = f"""🔥 HYBRID TRADING BOT v12.0 - ACTIVE 🔥
+            msg = f"""🔥 HYBRID BOT v12.0 - CORRECTED 🔥
 
 {sep}
-DATA SOURCE: Upstox API
-AI ENGINE: DeepSeek V3
+✅ FIXED ISINS:
+   • PAGEIND: INE761H01022
+   • LICHSGFIN: INE115A01026
+   • BAJAJFINSV: INE918I01026 (added)
+   • BAJFINANCE: Removed
+
+✅ FIXED INDICES:
+   • MIDCAP: NSE_INDEX|NIFTY MID SELECT
+   • SENSEX: BSE_INDEX|SENSEX
+
+{sep}
 REDIS: {redis_status} {redis_note}
 {sep}
 
@@ -788,32 +935,12 @@ REDIS: {redis_status} {redis_note}
    • {len(INDICES)} Indices
    • {len(SELECTED_STOCKS)} Stocks
 
-⏰ Scan Interval: 15 minutes
+⏰ Scan: 15 minutes
 
 {sep}
-SINGLE-PHASE DEEP ANALYSIS
+ALERTS: TEXT + PNG CHART 📈
 {sep}
 
-✅ All instruments analyzed deeply
-✅ Comprehensive scoring:
-   - Chart analysis /50
-   - Options analysis /50
-   - Alignment /25
-
-✅ Filters:
-   - Confidence ≥75%
-   - Total Score ≥90/125
-   - Alignment ≥18/25
-
-{sep}
-REDIS OI TRACKING
-{sep}
-
-{'✅ Redis connected successfully!' if self.redis_connected else '⚠️ Redis not available - running without OI comparison'}
-{'✅ OI data stored with 24h expiry' if self.redis_connected else '⚠️ Install redis-py for OI tracking'}
-{'✅ Real-time OI change detection' if self.redis_connected else ''}
-
-{sep}
 Status: 🟢 RUNNING
 Market: 9:15 AM - 3:30 PM IST
 {sep}"""
@@ -827,8 +954,8 @@ Market: 9:15 AM - 3:30 PM IST
             logger.error(f"Startup message error: {e}")
     
     async def send_alert(self, symbol: str, spot_price: float, analysis: DeepAnalysis,
-                        aggregate: AggregateOIAnalysis, expiry: str):
-        """Send trading alert with OI data"""
+                        aggregate: AggregateOIAnalysis, expiry: str, df: pd.DataFrame):
+        """Send TEXT + PNG CHART alert"""
         try:
             signal_map = {
                 "PE_BUY": ("🟢", "PE BUY (Bullish)"),
@@ -840,6 +967,7 @@ Market: 9:15 AM - 3:30 PM IST
             ist_time = datetime.now(IST).strftime('%H:%M:%S')
             sep = "=" * 40
             
+            # TEXT ALERT
             alert = f"""🎯 TRADING SIGNAL - {symbol}
 
 {signal_emoji} {signal_text}
@@ -910,15 +1038,27 @@ RISK FACTORS
             alert += f"\n🤖 AI: DeepSeek V3 | v12.0"
             alert += f"\n{sep}"
             
+            # Send text alert
             await self.bot.send_message(
                 chat_id=TELEGRAM_CHAT_ID,
                 text=alert
             )
             
+            # Generate and send chart
+            chart_buf = ChartGenerator.create_chart(df, symbol, spot_price, analysis, aggregate)
+            if chart_buf:
+                await self.bot.send_photo(
+                    chat_id=TELEGRAM_CHAT_ID,
+                    photo=chart_buf,
+                    caption=f"📈 {symbol} Chart | {signal_emoji} {signal_text}"
+                )
+                logger.info(f"✅ Chart sent for {symbol}")
+            
             logger.info(f"✅ Alert sent: {symbol} - {analysis.opportunity}")
             
         except Exception as e:
             logger.error(f"Alert error: {e}")
+            logger.error(traceback.format_exc())
     
     async def send_cycle_summary(self, total_scanned: int, alerts_sent: int):
         """Send scan cycle summary"""
@@ -938,15 +1078,12 @@ Alerts Sent: {alerts_sent}
             logger.error(f"Summary error: {e}")
 
 class HybridTradingBot:
-    """Main bot orchestrator with Redis OI tracking"""
+    """Main bot with corrected ISINs + chart alerts"""
     
     def __init__(self):
-        logger.info("Initializing Hybrid Trading Bot v12.0 with Redis...")
+        logger.info("Initializing Hybrid Trading Bot v12.0...")
         
-        # Initialize Redis first
         self.redis = RedisCache()
-        
-        # Initialize other components
         self.fetcher = UpstoxDataFetcher()
         self.oi_analyzer = OIAnalyzer(self.redis)
         self.chart_analyzer = ChartAnalyzer()
@@ -956,7 +1093,7 @@ class HybridTradingBot:
         self.total_scanned = 0
         self.alerts_sent = 0
         
-        logger.info(f"✅ Bot v12.0 initialized! Redis: {self.redis.connected}")
+        logger.info(f"✅ Bot initialized! Redis: {self.redis.connected}")
     
     def is_market_open(self) -> bool:
         """Check if market is open"""
@@ -969,7 +1106,7 @@ class HybridTradingBot:
         return "09:15" <= current_time <= "15:30"
     
     async def deep_scan_analysis(self, instruments: Dict):
-        """Deep analysis for all instruments with Redis OI tracking"""
+        """Deep analysis with chart generation"""
         
         logger.info("\n" + "="*70)
         logger.info(f"DEEP ANALYSIS SCAN ({len(instruments)} instruments)")
@@ -993,48 +1130,53 @@ class HybridTradingBot:
                 # Get spot price
                 spot_price = self.fetcher.get_spot_price(key)
                 if spot_price == 0:
-                    logger.warning(f"{symbol}: No spot price")
+                    logger.warning(f"❌ {symbol}: Failed to get spot price")
                     continue
                 
-                logger.info(f"{symbol}: Spot ₹{spot_price:.2f}")
+                logger.info(f"  ✅ Spot: ₹{spot_price:.2f}")
                 
                 # Get expiry
                 expiry = self.fetcher.get_next_expiry(key, expiry_day)
+                logger.info(f"  📅 Expiry: {expiry}")
                 
                 # Get option chain
                 strikes = self.fetcher.get_option_chain(key, expiry)
                 if not strikes or len(strikes) < 10:
-                    logger.warning(f"{symbol}: Insufficient option data")
+                    logger.warning(f"  ❌ {symbol}: Insufficient option data")
                     continue
+                
+                logger.info(f"  📤 Option chain: {len(strikes)} strikes")
                 
                 # Parse OI data
                 oi_data = self.oi_analyzer.parse_option_chain(strikes, spot_price)
                 if not oi_data:
-                    logger.warning(f"{symbol}: No OI data")
+                    logger.warning(f"  ❌ {symbol}: No OI data")
                     continue
                 
-                # Get aggregate analysis with Redis comparison
+                # Get aggregate with Redis comparison
                 aggregate = self.redis.get_oi_comparison(symbol, oi_data, spot_price)
                 if not aggregate:
-                    logger.warning(f"{symbol}: No aggregate data")
+                    logger.warning(f"  ❌ {symbol}: No aggregate data")
                     continue
                 
-                # Store current OI data in Redis for next comparison
+                # Store current OI in Redis
                 self.redis.store_option_chain(symbol, oi_data, spot_price)
                 
-                logger.info(f"{symbol}: PCR={aggregate.pcr:.2f}, Sentiment={aggregate.overall_sentiment}")
+                logger.info(f"  📊 PCR: {aggregate.pcr:.2f} | Sentiment: {aggregate.overall_sentiment}")
                 
                 # Get candle data
                 df = self.fetcher.get_candle_data(key, symbol)
                 if df is None or len(df) < 30:
-                    logger.warning(f"{symbol}: Insufficient chart data")
+                    logger.warning(f"  ❌ {symbol}: Insufficient chart data")
                     continue
+                
+                logger.info(f"  📊 Candles: {len(df)} total")
                 
                 # Chart analysis
                 structure = self.chart_analyzer.identify_market_structure(df)
                 sr_levels = self.chart_analyzer.calculate_support_resistance(df)
                 
-                logger.info(f"{symbol}: Structure={structure['structure']}, Bias={structure['bias']}")
+                logger.info(f"  📈 Structure: {structure['structure']} | Bias: {structure['bias']}")
                 
                 # Deep AI analysis
                 deep = self.ai_analyzer.deep_analysis(
@@ -1042,26 +1184,26 @@ class HybridTradingBot:
                 )
                 
                 if not deep:
-                    logger.warning(f"{symbol}: AI analysis failed")
+                    logger.warning(f"  ❌ {symbol}: AI analysis failed")
                     continue
                 
-                logger.info(f"{symbol}: AI Score={deep.total_score}/125, Confidence={deep.confidence}%")
+                logger.info(f"  🤖 AI: Score={deep.total_score}/125, Confidence={deep.confidence}%")
                 
                 # Apply filters
                 if deep.opportunity == "WAIT":
-                    logger.info(f"❌ {symbol}: AI says WAIT")
+                    logger.info(f"  ❌ {symbol}: AI says WAIT")
                     continue
                 
                 if deep.confidence < CONFIDENCE_MIN:
-                    logger.info(f"❌ {symbol}: Confidence {deep.confidence}% < {CONFIDENCE_MIN}%")
+                    logger.info(f"  ❌ {symbol}: Confidence {deep.confidence}% < {CONFIDENCE_MIN}%")
                     continue
                 
                 if deep.total_score < SCORE_MIN:
-                    logger.info(f"❌ {symbol}: Score {deep.total_score} < {SCORE_MIN}")
+                    logger.info(f"  ❌ {symbol}: Score {deep.total_score} < {SCORE_MIN}")
                     continue
                 
                 if deep.alignment_score < ALIGNMENT_MIN:
-                    logger.info(f"❌ {symbol}: Alignment {deep.alignment_score} < {ALIGNMENT_MIN}")
+                    logger.info(f"  ❌ {symbol}: Alignment {deep.alignment_score} < {ALIGNMENT_MIN}")
                     continue
                 
                 # Time filter
@@ -1070,24 +1212,24 @@ class HybridTradingBot:
                 minute = now_ist.minute
                 
                 if hour == 9 and minute < 25:
-                    logger.info(f"❌ {symbol}: Opening period")
+                    logger.info(f"  ❌ {symbol}: Opening period")
                     continue
                 
                 if hour == 15 or (hour == 14 and minute >= 40):
-                    logger.info(f"❌ {symbol}: Closing period")
+                    logger.info(f"  ❌ {symbol}: Closing period")
                     continue
                 
-                logger.info(f"✅ {symbol}: ALL FILTERS PASSED - Sending alert!")
+                logger.info(f"  ✅ {symbol}: ALL FILTERS PASSED!")
                 
-                # Send alert
-                await self.notifier.send_alert(symbol, spot_price, deep, aggregate, expiry)
+                # Send alert with chart
+                await self.notifier.send_alert(symbol, spot_price, deep, aggregate, expiry, df)
                 
                 self.alerts_sent += 1
                 
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 
             except Exception as e:
-                logger.error(f"Deep scan error {key}: {e}")
+                logger.error(f"❌ Deep scan error {key}: {e}")
                 logger.error(traceback.format_exc())
             
             await asyncio.sleep(1)
@@ -1095,7 +1237,7 @@ class HybridTradingBot:
         alerts_this_cycle = self.alerts_sent - alerts_before
         
         logger.info(f"\n{'='*70}")
-        logger.info(f"SCAN COMPLETE: {self.total_scanned} analyzed, {alerts_this_cycle} alerts sent")
+        logger.info(f"✅ CYCLE COMPLETE: {alerts_this_cycle} alerts sent")
         logger.info(f"{'='*70}\n")
         
         return alerts_this_cycle
@@ -1103,7 +1245,7 @@ class HybridTradingBot:
     async def run_scan_cycle(self):
         """Run complete scan cycle"""
         logger.info(f"\n{'='*70}")
-        logger.info(f"SCAN CYCLE START - {datetime.now(IST).strftime('%H:%M:%S IST')}")
+        logger.info(f"🔄 SCAN START - {datetime.now(IST).strftime('%H:%M:%S IST')}")
         logger.info(f"{'='*70}")
         
         scan_count_before = self.total_scanned
@@ -1111,7 +1253,7 @@ class HybridTradingBot:
         # Combine all instruments
         all_instruments = {**INDICES, **SELECTED_STOCKS}
         
-        # Deep analysis on all
+        # Deep analysis
         alerts_sent = await self.deep_scan_analysis(all_instruments)
         
         # Send summary
@@ -1119,15 +1261,13 @@ class HybridTradingBot:
         await self.notifier.send_cycle_summary(instruments_scanned, alerts_sent)
         
         logger.info(f"\n{'='*70}")
-        logger.info(f"CYCLE COMPLETE")
-        logger.info(f"Analyzed: {instruments_scanned}")
-        logger.info(f"Alerts: {alerts_sent}")
+        logger.info(f"✅ CYCLE COMPLETE")
         logger.info(f"{'='*70}\n")
     
     async def run(self):
         """Main bot loop"""
         logger.info("="*70)
-        logger.info("HYBRID TRADING BOT v12.0 WITH REDIS")
+        logger.info("HYBRID TRADING BOT v12.0 - CORRECTED")
         logger.info("="*70)
         
         # Check credentials
@@ -1138,14 +1278,13 @@ class HybridTradingBot:
                 missing.append(cred)
         
         if missing:
-            logger.error(f"Missing credentials: {', '.join(missing)}")
+            logger.error(f"Missing: {', '.join(missing)}")
             return
         
-        # Send startup message with Redis status
         await self.notifier.send_startup_message()
         
         logger.info("="*70)
-        logger.info(f"Bot RUNNING - Redis: {'✅ Connected' if self.redis.connected else '❌ Not Connected'}")
+        logger.info(f"🟢 Bot RUNNING - Redis: {self.redis.connected}")
         logger.info("="*70)
         
         while True:
@@ -1155,11 +1294,9 @@ class HybridTradingBot:
                     await asyncio.sleep(60)
                     continue
                 
-                # Run scan cycle
                 await self.run_scan_cycle()
                 
-                # Wait for next cycle
-                logger.info(f"Next scan in {SCAN_INTERVAL // 60} minutes...")
+                logger.info(f"⏳ Next scan in {SCAN_INTERVAL // 60} minutes...")
                 await asyncio.sleep(SCAN_INTERVAL)
                 
             except KeyboardInterrupt:
@@ -1181,14 +1318,13 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("="*70)
-    logger.info("HYBRID TRADING BOT v12.0 WITH REDIS STARTING...")
-    logger.info("Upstox + DeepSeek AI + Redis OI Tracking")
+    logger.info("HYBRID BOT v12.0 - CORRECTED VERSION STARTING...")
     logger.info("="*70)
     
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("\nShutdown (Ctrl+C)")
+        logger.info("\n✅ Shutdown complete")
     except Exception as e:
-        logger.error(f"\nCritical error: {e}")
+        logger.error(f"\n❌ Critical error: {e}")
         logger.error(traceback.format_exc())
