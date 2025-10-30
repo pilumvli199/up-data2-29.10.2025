@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-HYBRID TRADING BOT v12.0 - FIXED
+HYBRID TRADING BOT v12.0 - WITH REDIS OI TRACKING
 - Upstox data fetching (indices + stocks)
 - DeepSeek AI analysis with advanced strategies
+- Redis OI storage and comparison (24h expiry)
 - SINGLE-PHASE: Deep analysis only
 - Chart + Option chain combined analysis
 """
@@ -29,6 +30,14 @@ from typing import Dict, List, Optional, Tuple
 import traceback
 import re
 
+# Redis import with fallback
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    logging.warning("Redis not available - running without OI tracking")
+
 # Setup logging
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,8 +47,12 @@ UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 BASE_URL = "https://api.upstox.com"
 IST = pytz.timezone('Asia/Kolkata')
+
+# Redis expiry: 24 hours
+REDIS_EXPIRY = 86400
 
 # INDICES - 4 Selected
 INDICES = {
@@ -114,7 +127,6 @@ SCORE_MIN = 90
 ALIGNMENT_MIN = 18
 
 SCAN_INTERVAL = 900  # 15 minutes
-OI_CACHE = {}
 
 @dataclass
 class OIData:
@@ -166,6 +178,164 @@ class DeepAnalysis:
     scenario_bearish: str
     risk_factors: List[str]
     monitoring_checklist: List[str]
+
+class RedisCache:
+    """Redis cache for OI data with 24-hour expiry"""
+    
+    def __init__(self):
+        self.redis_client = None
+        self.connected = False
+        
+        if not REDIS_AVAILABLE:
+            logger.warning("⚠️ Redis module not installed")
+            return
+        
+        try:
+            logger.info("🔄 Connecting to Redis...")
+            self.redis_client = redis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=5
+            )
+            self.redis_client.ping()
+            self.connected = True
+            logger.info("✅ Redis connected successfully!")
+        except Exception as e:
+            logger.error(f"❌ Redis connection failed: {e}")
+            self.redis_client = None
+            self.connected = False
+    
+    def store_option_chain(self, symbol: str, oi_data: List[OIData], spot_price: float) -> bool:
+        """Store option chain data in Redis with 24h expiry"""
+        try:
+            if not self.redis_client or not self.connected:
+                return False
+            
+            key = f"oi_data:{symbol}"
+            value = json.dumps({
+                'spot_price': spot_price,
+                'strikes': [
+                    {
+                        'strike': oi.strike,
+                        'ce_oi': oi.ce_oi,
+                        'pe_oi': oi.pe_oi,
+                        'ce_volume': oi.ce_volume,
+                        'pe_volume': oi.pe_volume,
+                        'ce_iv': oi.ce_iv,
+                        'pe_iv': oi.pe_iv
+                    }
+                    for oi in oi_data
+                ],
+                'timestamp': datetime.now(IST).isoformat()
+            })
+            
+            # Store with 24-hour expiry
+            self.redis_client.setex(key, REDIS_EXPIRY, value)
+            return True
+        except Exception as e:
+            logger.error(f"Redis store error: {e}")
+            return False
+    
+    def get_oi_comparison(self, symbol: str, current_oi: List[OIData], 
+                         current_price: float) -> Optional[AggregateOIAnalysis]:
+        """Compare current OI with cached data and return aggregate analysis"""
+        try:
+            if not self.redis_client or not self.connected:
+                # Return analysis without comparison
+                return self._calculate_aggregate_without_cache(current_oi)
+            
+            key = f"oi_data:{symbol}"
+            cached = self.redis_client.get(key)
+            
+            if not cached:
+                logger.info(f"{symbol}: First scan (no cache)")
+                return self._calculate_aggregate_without_cache(current_oi)
+            
+            old_data = json.loads(cached)
+            old_strikes = {s['strike']: s for s in old_data['strikes']}
+            previous_price = old_data.get('spot_price', current_price)
+            
+            # Calculate price change
+            price_change = current_price - previous_price
+            price_direction = "UP" if price_change > 0 else "DOWN" if price_change < 0 else "FLAT"
+            
+            # Calculate old totals
+            total_ce_oi_old = sum(s['ce_oi'] for s in old_data['strikes'])
+            total_pe_oi_old = sum(s['pe_oi'] for s in old_data['strikes'])
+            total_ce_volume_old = sum(s['ce_volume'] for s in old_data['strikes'])
+            total_pe_volume_old = sum(s['pe_volume'] for s in old_data['strikes'])
+            
+            # Calculate new totals
+            total_ce_oi_new = sum(oi.ce_oi for oi in current_oi)
+            total_pe_oi_new = sum(oi.pe_oi for oi in current_oi)
+            total_ce_volume_new = sum(oi.ce_volume for oi in current_oi)
+            total_pe_volume_new = sum(oi.pe_volume for oi in current_oi)
+            
+            # Calculate changes
+            ce_oi_change_pct = ((total_ce_oi_new - total_ce_oi_old) / total_ce_oi_old * 100) if total_ce_oi_old > 0 else 0
+            pe_oi_change_pct = ((total_pe_oi_new - total_pe_oi_old) / total_pe_oi_old * 100) if total_pe_oi_old > 0 else 0
+            ce_volume_change_pct = ((total_ce_volume_new - total_ce_volume_old) / total_ce_volume_old * 100) if total_ce_volume_old > 0 else 0
+            pe_volume_change_pct = ((total_pe_volume_new - total_pe_volume_old) / total_pe_volume_old * 100) if total_pe_volume_old > 0 else 0
+            
+            pcr = total_pe_oi_new / total_ce_oi_new if total_ce_oi_new > 0 else 0
+            
+            # Determine sentiment
+            sentiment = "NEUTRAL"
+            if pe_oi_change_pct > 5 and pe_oi_change_pct > ce_oi_change_pct:
+                sentiment = "BULLISH"
+            elif ce_oi_change_pct > 5 and ce_oi_change_pct > pe_oi_change_pct:
+                sentiment = "BEARISH"
+            elif pcr > 1.3:
+                sentiment = "BULLISH"
+            elif pcr < 0.7:
+                sentiment = "BEARISH"
+            
+            logger.info(f"{symbol}: OI Change - CE:{ce_oi_change_pct:+.1f}% PE:{pe_oi_change_pct:+.1f}% | Sentiment:{sentiment}")
+            
+            return AggregateOIAnalysis(
+                total_ce_oi=total_ce_oi_new,
+                total_pe_oi=total_pe_oi_new,
+                total_ce_volume=total_ce_volume_new,
+                total_pe_volume=total_pe_volume_new,
+                ce_oi_change_pct=ce_oi_change_pct,
+                pe_oi_change_pct=pe_oi_change_pct,
+                ce_volume_change_pct=ce_volume_change_pct,
+                pe_volume_change_pct=pe_volume_change_pct,
+                pcr=pcr,
+                overall_sentiment=sentiment
+            )
+            
+        except Exception as e:
+            logger.error(f"Redis comparison error: {e}")
+            return self._calculate_aggregate_without_cache(current_oi)
+    
+    def _calculate_aggregate_without_cache(self, oi_data: List[OIData]) -> AggregateOIAnalysis:
+        """Calculate aggregate without comparison (first scan)"""
+        total_ce_oi = sum(oi.ce_oi for oi in oi_data)
+        total_pe_oi = sum(oi.pe_oi for oi in oi_data)
+        total_ce_volume = sum(oi.ce_volume for oi in oi_data)
+        total_pe_volume = sum(oi.pe_volume for oi in oi_data)
+        
+        pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
+        
+        sentiment = "NEUTRAL"
+        if pcr > 1.3:
+            sentiment = "BULLISH"
+        elif pcr < 0.7:
+            sentiment = "BEARISH"
+        
+        return AggregateOIAnalysis(
+            total_ce_oi=total_ce_oi,
+            total_pe_oi=total_pe_oi,
+            total_ce_volume=total_ce_volume,
+            total_pe_volume=total_pe_volume,
+            ce_oi_change_pct=0,
+            pe_oi_change_pct=0,
+            ce_volume_change_pct=0,
+            pe_volume_change_pct=0,
+            pcr=pcr,
+            overall_sentiment=sentiment
+        )
 
 class UpstoxDataFetcher:
     """Upstox API for data fetching"""
@@ -297,10 +467,12 @@ class UpstoxDataFetcher:
         return df_15m
 
 class OIAnalyzer:
-    """Option chain analysis with OI tracking"""
+    """Option chain analysis with Redis tracking"""
     
-    @staticmethod
-    def parse_option_chain(strikes, spot_price) -> List[OIData]:
+    def __init__(self, redis_cache: RedisCache):
+        self.redis = redis_cache
+    
+    def parse_option_chain(self, strikes, spot_price) -> List[OIData]:
         """Convert raw option chain to OIData"""
         if not strikes:
             return []
@@ -335,67 +507,6 @@ class OIAnalyzer:
             ))
         
         return oi_list
-    
-    @staticmethod
-    def get_aggregate_analysis(symbol: str, current_oi: List[OIData]) -> Optional[AggregateOIAnalysis]:
-        """Compare OI with cached data"""
-        if not current_oi:
-            return None
-        
-        cache_key = symbol
-        prev_oi_data = OI_CACHE.get(cache_key, {})
-        
-        # Calculate totals
-        total_ce_oi = sum(oi.ce_oi for oi in current_oi)
-        total_pe_oi = sum(oi.pe_oi for oi in current_oi)
-        total_ce_volume = sum(oi.ce_volume for oi in current_oi)
-        total_pe_volume = sum(oi.pe_volume for oi in current_oi)
-        
-        # Get old totals
-        old_ce_oi = prev_oi_data.get('total_ce_oi', total_ce_oi)
-        old_pe_oi = prev_oi_data.get('total_pe_oi', total_pe_oi)
-        old_ce_volume = prev_oi_data.get('total_ce_volume', total_ce_volume)
-        old_pe_volume = prev_oi_data.get('total_pe_volume', total_pe_volume)
-        
-        # Calculate changes
-        ce_oi_change_pct = ((total_ce_oi - old_ce_oi) / old_ce_oi * 100) if old_ce_oi > 0 else 0
-        pe_oi_change_pct = ((total_pe_oi - old_pe_oi) / old_pe_oi * 100) if old_pe_oi > 0 else 0
-        ce_volume_change_pct = ((total_ce_volume - old_ce_volume) / old_ce_volume * 100) if old_ce_volume > 0 else 0
-        pe_volume_change_pct = ((total_pe_volume - old_pe_volume) / old_pe_volume * 100) if old_pe_volume > 0 else 0
-        
-        pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
-        
-        # Sentiment
-        sentiment = "NEUTRAL"
-        if pe_oi_change_pct > 3 and pe_oi_change_pct > ce_oi_change_pct:
-            sentiment = "BULLISH"
-        elif ce_oi_change_pct > 3 and ce_oi_change_pct > pe_oi_change_pct:
-            sentiment = "BEARISH"
-        elif pcr > 1.2:
-            sentiment = "BULLISH"
-        elif pcr < 0.8:
-            sentiment = "BEARISH"
-        
-        # Update cache
-        OI_CACHE[cache_key] = {
-            'total_ce_oi': total_ce_oi,
-            'total_pe_oi': total_pe_oi,
-            'total_ce_volume': total_ce_volume,
-            'total_pe_volume': total_pe_volume
-        }
-        
-        return AggregateOIAnalysis(
-            total_ce_oi=total_ce_oi,
-            total_pe_oi=total_pe_oi,
-            total_ce_volume=total_ce_volume,
-            total_pe_volume=total_pe_volume,
-            ce_oi_change_pct=ce_oi_change_pct,
-            pe_oi_change_pct=pe_oi_change_pct,
-            ce_volume_change_pct=ce_volume_change_pct,
-            pe_volume_change_pct=pe_volume_change_pct,
-            pcr=pcr,
-            overall_sentiment=sentiment
-        )
 
 class ChartAnalyzer:
     """Advanced chart pattern analysis"""
@@ -563,6 +674,7 @@ OPTIONS:
 PCR: {aggregate.pcr:.2f}
 CE: {aggregate.ce_oi_change_pct:+.2f}% | Vol: {aggregate.ce_volume_change_pct:+.2f}%
 PE: {aggregate.pe_oi_change_pct:+.2f}% | Vol: {aggregate.pe_volume_change_pct:+.2f}%
+Sentiment: {aggregate.overall_sentiment}
 
 Score /125:
 - Chart: /50
@@ -651,20 +763,25 @@ Reply JSON:
             return None
 
 class TelegramNotifier:
-    """Telegram message sender - FIXED"""
+    """Telegram message sender with Redis status"""
     
-    def __init__(self):
+    def __init__(self, redis_connected: bool):
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        self.redis_connected = redis_connected
     
     async def send_startup_message(self):
-        """Send bot startup notification - FIXED"""
+        """Send bot startup notification with Redis status"""
         try:
+            redis_status = "🟢 Connected" if self.redis_connected else "🔴 Not Connected"
+            redis_note = "(OI tracking enabled)" if self.redis_connected else "(OI tracking disabled)"
+            
             sep = "=" * 40
             msg = f"""🔥 HYBRID TRADING BOT v12.0 - ACTIVE 🔥
 
 {sep}
 DATA SOURCE: Upstox API
 AI ENGINE: DeepSeek V3
+REDIS: {redis_status} {redis_note}
 {sep}
 
 📊 Monitoring:
@@ -689,6 +806,14 @@ SINGLE-PHASE DEEP ANALYSIS
    - Alignment ≥18/25
 
 {sep}
+REDIS OI TRACKING
+{sep}
+
+{'✅ Redis connected successfully!' if self.redis_connected else '⚠️ Redis not available - running without OI comparison'}
+{'✅ OI data stored with 24h expiry' if self.redis_connected else '⚠️ Install redis-py for OI tracking'}
+{'✅ Real-time OI change detection' if self.redis_connected else ''}
+
+{sep}
 Status: 🟢 RUNNING
 Market: 9:15 AM - 3:30 PM IST
 {sep}"""
@@ -697,13 +822,13 @@ Market: 9:15 AM - 3:30 PM IST
                 chat_id=TELEGRAM_CHAT_ID,
                 text=msg
             )
-            logger.info("Startup message sent!")
+            logger.info("✅ Startup message sent!")
         except Exception as e:
             logger.error(f"Startup message error: {e}")
     
     async def send_alert(self, symbol: str, spot_price: float, analysis: DeepAnalysis,
                         aggregate: AggregateOIAnalysis, expiry: str):
-        """Send trading alert - FIXED"""
+        """Send trading alert with OI data"""
         try:
             signal_map = {
                 "PE_BUY": ("🟢", "PE BUY (Bullish)"),
@@ -715,7 +840,6 @@ Market: 9:15 AM - 3:30 PM IST
             ist_time = datetime.now(IST).strftime('%H:%M:%S')
             sep = "=" * 40
             
-            # Main alert
             alert = f"""🎯 TRADING SIGNAL - {symbol}
 
 {signal_emoji} {signal_text}
@@ -747,11 +871,12 @@ Support: {', '.join([f"₹{s:.1f}" for s in analysis.support_levels[:2]])}
 Resistance: {', '.join([f"₹{r:.1f}" for r in analysis.resistance_levels[:2]])}
 
 {sep}
-OPTIONS DATA
+OPTIONS DATA (REDIS)
 {sep}
 PCR: {aggregate.pcr:.2f}
 CE OI: {aggregate.ce_oi_change_pct:+.1f}% | Vol: {aggregate.ce_volume_change_pct:+.1f}%
 PE OI: {aggregate.pe_oi_change_pct:+.1f}% | Vol: {aggregate.pe_volume_change_pct:+.1f}%
+Sentiment: {aggregate.overall_sentiment}
 
 {sep}
 SIGNALS
@@ -790,7 +915,7 @@ RISK FACTORS
                 text=alert
             )
             
-            logger.info(f"Alert sent: {symbol} - {analysis.opportunity}")
+            logger.info(f"✅ Alert sent: {symbol} - {analysis.opportunity}")
             
         except Exception as e:
             logger.error(f"Alert error: {e}")
@@ -813,33 +938,38 @@ Alerts Sent: {alerts_sent}
             logger.error(f"Summary error: {e}")
 
 class HybridTradingBot:
-    """Main bot orchestrator"""
+    """Main bot orchestrator with Redis OI tracking"""
     
     def __init__(self):
-        logger.info("Initializing Hybrid Trading Bot v12.0...")
+        logger.info("Initializing Hybrid Trading Bot v12.0 with Redis...")
+        
+        # Initialize Redis first
+        self.redis = RedisCache()
+        
+        # Initialize other components
         self.fetcher = UpstoxDataFetcher()
-        self.oi_analyzer = OIAnalyzer()
+        self.oi_analyzer = OIAnalyzer(self.redis)
         self.chart_analyzer = ChartAnalyzer()
         self.ai_analyzer = AIAnalyzer()
-        self.notifier = TelegramNotifier()
+        self.notifier = TelegramNotifier(self.redis.connected)
         
         self.total_scanned = 0
         self.alerts_sent = 0
         
-        logger.info("Bot v12.0 initialized!")
+        logger.info(f"✅ Bot v12.0 initialized! Redis: {self.redis.connected}")
     
     def is_market_open(self) -> bool:
         """Check if market is open"""
         now_ist = datetime.now(IST)
         current_time = now_ist.strftime("%H:%M")
         
-        if now_ist.weekday() >= 5:  # Weekend
+        if now_ist.weekday() >= 5:
             return False
         
         return "09:15" <= current_time <= "15:30"
     
     async def deep_scan_analysis(self, instruments: Dict):
-        """Deep analysis for all instruments"""
+        """Deep analysis for all instruments with Redis OI tracking"""
         
         logger.info("\n" + "="*70)
         logger.info(f"DEEP ANALYSIS SCAN ({len(instruments)} instruments)")
@@ -883,11 +1013,14 @@ class HybridTradingBot:
                     logger.warning(f"{symbol}: No OI data")
                     continue
                 
-                # Get aggregate analysis
-                aggregate = self.oi_analyzer.get_aggregate_analysis(symbol, oi_data)
+                # Get aggregate analysis with Redis comparison
+                aggregate = self.redis.get_oi_comparison(symbol, oi_data, spot_price)
                 if not aggregate:
                     logger.warning(f"{symbol}: No aggregate data")
                     continue
+                
+                # Store current OI data in Redis for next comparison
+                self.redis.store_option_chain(symbol, oi_data, spot_price)
                 
                 logger.info(f"{symbol}: PCR={aggregate.pcr:.2f}, Sentiment={aggregate.overall_sentiment}")
                 
@@ -931,7 +1064,7 @@ class HybridTradingBot:
                     logger.info(f"❌ {symbol}: Alignment {deep.alignment_score} < {ALIGNMENT_MIN}")
                     continue
                 
-                # Time filter (skip opening/closing)
+                # Time filter
                 now_ist = datetime.now(IST)
                 hour = now_ist.hour
                 minute = now_ist.minute
@@ -957,7 +1090,6 @@ class HybridTradingBot:
                 logger.error(f"Deep scan error {key}: {e}")
                 logger.error(traceback.format_exc())
             
-            # Small delay between instruments
             await asyncio.sleep(1)
         
         alerts_this_cycle = self.alerts_sent - alerts_before
@@ -974,7 +1106,6 @@ class HybridTradingBot:
         logger.info(f"SCAN CYCLE START - {datetime.now(IST).strftime('%H:%M:%S IST')}")
         logger.info(f"{'='*70}")
         
-        # Reset counter
         scan_count_before = self.total_scanned
         
         # Combine all instruments
@@ -996,7 +1127,7 @@ class HybridTradingBot:
     async def run(self):
         """Main bot loop"""
         logger.info("="*70)
-        logger.info("HYBRID TRADING BOT v12.0")
+        logger.info("HYBRID TRADING BOT v12.0 WITH REDIS")
         logger.info("="*70)
         
         # Check credentials
@@ -1010,11 +1141,11 @@ class HybridTradingBot:
             logger.error(f"Missing credentials: {', '.join(missing)}")
             return
         
-        # Send startup message
+        # Send startup message with Redis status
         await self.notifier.send_startup_message()
         
         logger.info("="*70)
-        logger.info("Bot RUNNING - Single-phase deep analysis")
+        logger.info(f"Bot RUNNING - Redis: {'✅ Connected' if self.redis.connected else '❌ Not Connected'}")
         logger.info("="*70)
         
         while True:
@@ -1050,8 +1181,8 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("="*70)
-    logger.info("HYBRID TRADING BOT v12.0 STARTING...")
-    logger.info("Upstox + DeepSeek AI + Deep Analysis Only")
+    logger.info("HYBRID TRADING BOT v12.0 WITH REDIS STARTING...")
+    logger.info("Upstox + DeepSeek AI + Redis OI Tracking")
     logger.info("="*70)
     
     try:
