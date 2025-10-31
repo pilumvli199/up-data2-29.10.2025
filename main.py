@@ -1,23 +1,11 @@
 #!/usr/bin/env python3
 """
-HYBRID TRADING BOT v16.0 - BANK NIFTY & MIDCAP NIFTY + NEWS + SMART OI
+HYBRID TRADING BOT v16.1 - FIXED SIGNAL LOGIC
 ==================================================================
-✅ FOCUSED INDICES: BANK NIFTY & MIDCAP NIFTY only
-✅ FAST SCANNING: Every 15 minutes
-✅ MULTI-TIMEFRAME STRATEGY:
-   - 5min TF: Entry/Exit/Targets
-   - 15min TF: Patterns + OI analysis
-   - 1hr TF: Trend confirmation
-
-✅ SMART OI TRACKING:
-   - INDICES: 30min comparison (fast moving)
-   - LIQUID STOCKS: 2hr comparison (better buildup)
-   
-✅ 400+ CANDLESTICKS (15min)
-✅ FINNHUB NEWS INTELLIGENCE
-✅ AI ANALYSIS: DeepSeek v3 with news
-✅ REDIS OI TRACKING (dual timeframe)
-✅ PNG CHART ALERTS
+✅ CRITICAL FIX: Timeframe alignment > OI priority
+✅ Strict rules: BULLISH chart → only PE_BUY, BEARISH → only CE_BUY
+✅ News filtering: Only relevant sector news
+✅ Conflict handling: Chart + OI conflict → WAIT
 """
 
 import os
@@ -66,59 +54,75 @@ IST = pytz.timezone('Asia/Kolkata')
 
 # ✅ ONLY BANK NIFTY & MIDCAP NIFTY
 INDICES = {
-    "NSE_INDEX|Nifty Bank": {"name": "BANK NIFTY", "expiry_day": 2, "oi_timeframe": "30min"},
-    "NSE_INDEX|NIFTY MID SELECT": {"name": "MIDCAP NIFTY", "expiry_day": 0, "oi_timeframe": "30min"}
+    "NSE_INDEX|Nifty Bank": {"name": "BANK NIFTY", "expiry_day": 2, "oi_timeframe": "30min", "sector": "INDEX"},
+    "NSE_INDEX|NIFTY MID SELECT": {"name": "MIDCAP NIFTY", "expiry_day": 0, "oi_timeframe": "30min", "sector": "INDEX"}
 }
 
-# ✅ F&O STOCKS with SMART OI timeframe selection
+# ✅ F&O STOCKS with sector mapping for news filtering
 SELECTED_STOCKS = {
-    # 🔵 LIQUID STOCKS (2hr OI comparison - better for stocks)
-    "NSE_EQ|INE002A01018": {"name": "RELIANCE", "oi_timeframe": "2hr"},
-    "NSE_EQ|INE040A01034": {"name": "HDFCBANK", "oi_timeframe": "2hr"},
-    "NSE_EQ|INE009A01021": {"name": "INFY", "oi_timeframe": "2hr"},
-    "NSE_EQ|INE090A01021": {"name": "ICICIBANK", "oi_timeframe": "2hr"},
-    "NSE_EQ|INE854D01024": {"name": "TCS", "oi_timeframe": "2hr"},
+    # 🔵 LIQUID STOCKS (2hr OI comparison)
+    "NSE_EQ|INE002A01018": {"name": "RELIANCE", "oi_timeframe": "2hr", "sector": "OIL_GAS"},
+    "NSE_EQ|INE040A01034": {"name": "HDFCBANK", "oi_timeframe": "2hr", "sector": "BANKING"},
+    "NSE_EQ|INE009A01021": {"name": "INFY", "oi_timeframe": "2hr", "sector": "IT"},
+    "NSE_EQ|INE090A01021": {"name": "ICICIBANK", "oi_timeframe": "2hr", "sector": "BANKING"},
+    "NSE_EQ|INE854D01024": {"name": "TCS", "oi_timeframe": "2hr", "sector": "IT"},
     
-    # 🟢 AUTO (30min - faster moving)
-    "NSE_EQ|INE467B01029": {"name": "TATAMOTORS", "oi_timeframe": "30min"},
-    "NSE_EQ|INE585B01010": {"name": "MARUTI", "oi_timeframe": "30min"},
-    "NSE_EQ|INE917I01010": {"name": "BAJAJ-AUTO", "oi_timeframe": "30min"},
+    # 🟢 AUTO (30min)
+    "NSE_EQ|INE467B01029": {"name": "TATAMOTORS", "oi_timeframe": "30min", "sector": "AUTO"},
+    "NSE_EQ|INE585B01010": {"name": "MARUTI", "oi_timeframe": "30min", "sector": "AUTO"},
+    "NSE_EQ|INE917I01010": {"name": "BAJAJ-AUTO", "oi_timeframe": "30min", "sector": "AUTO"},
     
     # 🟢 BANKS (30min)
-    "NSE_EQ|INE062A01020": {"name": "SBIN", "oi_timeframe": "30min"},
-    "NSE_EQ|INE238A01034": {"name": "AXISBANK", "oi_timeframe": "30min"},
-    "NSE_EQ|INE237A01028": {"name": "KOTAKBANK", "oi_timeframe": "30min"},
+    "NSE_EQ|INE062A01020": {"name": "SBIN", "oi_timeframe": "30min", "sector": "BANKING"},
+    "NSE_EQ|INE238A01034": {"name": "AXISBANK", "oi_timeframe": "30min", "sector": "BANKING"},
+    "NSE_EQ|INE237A01028": {"name": "KOTAKBANK", "oi_timeframe": "30min", "sector": "BANKING"},
     
-    # 🔵 METALS (2hr - better buildup)
-    "NSE_EQ|INE155A01022": {"name": "TATASTEEL", "oi_timeframe": "2hr"},
-    "NSE_EQ|INE019A01038": {"name": "JSWSTEEL", "oi_timeframe": "2hr"},
+    # 🔵 METALS (2hr)
+    "NSE_EQ|INE155A01022": {"name": "TATASTEEL", "oi_timeframe": "2hr", "sector": "METALS"},
+    "NSE_EQ|INE019A01038": {"name": "JSWSTEEL", "oi_timeframe": "2hr", "sector": "METALS"},
     
     # 🟢 OIL & GAS (30min)
-    "NSE_EQ|INE213A01029": {"name": "ONGC", "oi_timeframe": "30min"},
+    "NSE_EQ|INE213A01029": {"name": "ONGC", "oi_timeframe": "30min", "sector": "OIL_GAS"},
     
-    # 🔵 IT (2hr - liquid, slower buildup)
-    "NSE_EQ|INE075A01022": {"name": "WIPRO", "oi_timeframe": "2hr"},
-    "NSE_EQ|INE047A01021": {"name": "HCLTECH", "oi_timeframe": "2hr"},
+    # 🔵 IT (2hr)
+    "NSE_EQ|INE075A01022": {"name": "WIPRO", "oi_timeframe": "2hr", "sector": "IT"},
+    "NSE_EQ|INE047A01021": {"name": "HCLTECH", "oi_timeframe": "2hr", "sector": "IT"},
     
     # 🟢 PHARMA (30min)
-    "NSE_EQ|INE044A01036": {"name": "SUNPHARMA", "oi_timeframe": "30min"},
+    "NSE_EQ|INE044A01036": {"name": "SUNPHARMA", "oi_timeframe": "30min", "sector": "PHARMA"},
     
     # 🟢 FMCG (30min)
-    "NSE_EQ|INE154A01025": {"name": "ITC", "oi_timeframe": "30min"},
+    "NSE_EQ|INE154A01025": {"name": "ITC", "oi_timeframe": "30min", "sector": "FMCG"},
     
     # 🟢 INFRA/POWER (30min)
-    "NSE_EQ|INE742F01042": {"name": "ADANIPORTS", "oi_timeframe": "30min"},
-    "NSE_EQ|INE018A01030": {"name": "LT", "oi_timeframe": "30min"},
+    "NSE_EQ|INE742F01042": {"name": "ADANIPORTS", "oi_timeframe": "30min", "sector": "INFRA"},
+    "NSE_EQ|INE018A01030": {"name": "LT", "oi_timeframe": "30min", "sector": "INFRA"},
     
     # 🟢 RETAIL/CONSUMER (30min)
-    "NSE_EQ|INE280A01028": {"name": "TITAN", "oi_timeframe": "30min"},
+    "NSE_EQ|INE280A01028": {"name": "TITAN", "oi_timeframe": "30min", "sector": "RETAIL"},
     
     # 🟢 INSURANCE (30min)
-    "NSE_EQ|INE860A01027": {"name": "HDFCLIFE", "oi_timeframe": "30min"},
+    "NSE_EQ|INE860A01027": {"name": "HDFCLIFE", "oi_timeframe": "30min", "sector": "INSURANCE"},
     
     # 🟢 OTHERS (30min)
-    "NSE_EQ|INE397D01024": {"name": "BHARTIARTL", "oi_timeframe": "30min"},
-    "NSE_EQ|INE918I01026": {"name": "BAJAJFINSV", "oi_timeframe": "30min"}
+    "NSE_EQ|INE397D01024": {"name": "BHARTIARTL", "oi_timeframe": "30min", "sector": "TELECOM"},
+    "NSE_EQ|INE918I01026": {"name": "BAJAJFINSV", "oi_timeframe": "30min", "sector": "BANKING"}
+}
+
+# ✅ NEW: Sector keywords for news filtering
+SECTOR_KEYWORDS = {
+    "BANKING": ["bank", "hdfc", "icici", "sbi", "axis", "kotak", "rbi", "lending", "npa"],
+    "IT": ["tech", "software", "it", "tcs", "infosys", "wipro", "hcl", "outsourcing"],
+    "AUTO": ["auto", "car", "vehicle", "tata motors", "maruti", "bajaj"],
+    "FMCG": ["fmcg", "consumer", "itc", "cigarette", "tobacco", "food"],
+    "PHARMA": ["pharma", "drug", "medicine", "sun pharma", "healthcare"],
+    "METALS": ["steel", "metal", "tata steel", "jsw", "iron", "copper"],
+    "OIL_GAS": ["oil", "gas", "reliance", "ongc", "petroleum", "crude"],
+    "INFRA": ["infra", "construction", "adani", "l&t", "ports"],
+    "TELECOM": ["telecom", "bharti", "airtel", "vodafone", "spectrum"],
+    "RETAIL": ["retail", "titan", "jewellery", "consumer goods"],
+    "INSURANCE": ["insurance", "life", "hdfc life", "policy"],
+    "INDEX": ["nifty", "sensex", "market", "india", "stocks"]
 }
 
 # Analysis thresholds
@@ -179,6 +183,7 @@ class NewsData:
     source: str
     url: str
     published_time: str
+    is_relevant: bool = False  # ✅ NEW
 
 @dataclass
 class DeepAnalysis:
@@ -210,6 +215,7 @@ class DeepAnalysis:
     news_sentiment: str = "NEUTRAL"
     news_impact: int = 0
     oi_timeframe_used: str = "30min"
+    signal_reason: str = ""  # ✅ NEW: Why this signal was chosen
 
 class FinnhubNewsAPI:
     """Finnhub API for real-time news"""
@@ -309,11 +315,8 @@ class RedisCache:
                 'timestamp': datetime.now(IST).isoformat()
             })
             
-            # Store in appropriate timeframe key
             key = f"oi_{oi_timeframe}:{symbol}"
-            
-            # Set expiry based on timeframe
-            expiry_seconds = 1800 if oi_timeframe == "30min" else 7200  # 30min or 2hr
+            expiry_seconds = 1800 if oi_timeframe == "30min" else 7200
             
             self.redis_client.setex(key, expiry_seconds, data_json)
             
@@ -622,17 +625,52 @@ class UpstoxDataFetcher:
             return None
 
 class NewsAnalyzer:
-    """Analyze news sentiment using DeepSeek"""
+    """Analyze news sentiment using DeepSeek with relevance filtering"""
     
     @staticmethod
-    def analyze_news_sentiment(symbol: str, news_list: List[Dict]) -> Optional[NewsData]:
-        """Use DeepSeek to analyze news sentiment"""
+    def is_news_relevant(symbol: str, sector: str, headline: str, summary: str) -> bool:
+        """✅ NEW: Check if news is relevant to the symbol/sector"""
+        try:
+            text = (headline + " " + summary).lower()
+            
+            # Check symbol name
+            if symbol.lower() in text:
+                return True
+            
+            # Check sector keywords
+            keywords = SECTOR_KEYWORDS.get(sector, [])
+            for keyword in keywords:
+                if keyword.lower() in text:
+                    return True
+            
+            return False
+        except:
+            return False
+    
+    @staticmethod
+    def analyze_news_sentiment(symbol: str, sector: str, news_list: List[Dict]) -> Optional[NewsData]:
+        """Use DeepSeek to analyze news sentiment - only relevant news"""
         try:
             if not news_list or not DEEPSEEK_API_KEY:
                 return None
             
+            # ✅ Filter relevant news only
+            relevant_news = []
+            for news in news_list[:10]:
+                headline = news.get('headline', '')
+                summary = news.get('summary', '')
+                
+                if NewsAnalyzer.is_news_relevant(symbol, sector, headline, summary):
+                    relevant_news.append(news)
+            
+            if not relevant_news:
+                logger.info(f"  📰 No relevant news found for {symbol}")
+                return None
+            
+            logger.info(f"  📰 Found {len(relevant_news)} relevant news for {symbol}")
+            
             news_summary = ""
-            for idx, news in enumerate(news_list[:5], 1):
+            for idx, news in enumerate(relevant_news[:3], 1):
                 headline = news.get('headline', '')
                 summary = news.get('summary', '')
                 news_summary += f"{idx}. {headline}\n   {summary[:200]}...\n\n"
@@ -643,11 +681,9 @@ class NewsAnalyzer:
                 "Content-Type": "application/json"
             }
             
-            prompt = f"""Analyze these recent news about {symbol} and Indian stock market:
+            prompt = f"""Analyze these news about {symbol} ({sector}):
 
 {news_summary}
-
-Provide sentiment analysis for trading:
 
 Reply ONLY JSON:
 {{
@@ -687,13 +723,14 @@ Impact score: 0-100. Be concise."""
                     return None
             
             return NewsData(
-                headline=news_list[0].get('headline', '')[:100],
+                headline=relevant_news[0].get('headline', '')[:100],
                 summary=analysis.get('key_insight', 'News analysis'),
                 sentiment=analysis.get('sentiment', 'NEUTRAL'),
                 impact_score=analysis.get('impact_score', 50),
                 source='Finnhub',
-                url=news_list[0].get('url', ''),
-                published_time=datetime.fromtimestamp(news_list[0].get('datetime', 0)).strftime('%H:%M')
+                url=relevant_news[0].get('url', ''),
+                published_time=datetime.fromtimestamp(relevant_news[0].get('datetime', 0)).strftime('%H:%M'),
+                is_relevant=True
             )
             
         except Exception as e:
@@ -759,7 +796,7 @@ class ChartGenerator:
                 ax1.axhline(y=analysis.target_2, color='#1b5e20', linestyle=':', linewidth=2, alpha=0.8)
             
             # Styling
-            title = f'{symbol} | 15min | 1H:{analysis.tf_1h_trend} | Score:{analysis.total_score}/125'
+            title = f'{symbol} | 15min | Score:{analysis.total_score}/125 | {analysis.signal_reason}'
             ax1.set_title(title, fontsize=14, fontweight='bold', pad=15)
             ax1.set_ylabel('Price (₹)', fontsize=12, fontweight='bold')
             ax1.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
@@ -778,10 +815,11 @@ class ChartGenerator:
             
             # Info box
             signal_emoji = "🟢" if analysis.opportunity == "PE_BUY" else "🔴" if analysis.opportunity == "CE_BUY" else "⚪"
-            news_emoji = "📰" if analysis.news_impact > 60 else ""
+            news_emoji = "📰✅" if analysis.news_impact > 60 else "📰❌" if analysis.news_impact > 0 else ""
             
             info_text = f"""
 {signal_emoji} {analysis.opportunity} | Conf: {analysis.confidence}%
+Reason: {analysis.signal_reason[:30]}
 TF: {analysis.tf_alignment}
 {news_emoji} News: {analysis.news_sentiment} ({analysis.news_impact})
 
@@ -946,7 +984,7 @@ class ChartAnalyzer:
             return {'supports': [current * 0.98], 'resistances': [current * 1.02]}
 
 class AIAnalyzer:
-    """DeepSeek AI analysis"""
+    """DeepSeek AI analysis with FIXED signal logic"""
     
     @staticmethod
     def extract_json(content: str) -> Optional[Dict]:
@@ -972,21 +1010,57 @@ class AIAnalyzer:
                      entry_5m: Dict, sr_levels: Dict, news_data: Optional[NewsData],
                      oi_timeframe: str) -> Optional[DeepAnalysis]:
         try:
+            # ✅ CRITICAL FIX: Pre-validate signal logic BEFORE AI
+            chart_bias = "NEUTRAL"
+            if trend_1h['trend'] == "BULLISH" and pattern_15m['signal'] == "BULLISH":
+                chart_bias = "BULLISH"
+            elif trend_1h['trend'] == "BEARISH" and pattern_15m['signal'] == "BEARISH":
+                chart_bias = "BEARISH"
+            
+            oi_bias = aggregate.overall_sentiment
+            
+            # ✅ CONFLICT DETECTION
+            if chart_bias == "BULLISH" and oi_bias == "BEARISH":
+                conflict = True
+                logger.warning(f"  ⚠️ CONFLICT: Chart BULLISH but OI BEARISH - Checking news...")
+            elif chart_bias == "BEARISH" and oi_bias == "BULLISH":
+                conflict = True
+                logger.warning(f"  ⚠️ CONFLICT: Chart BEARISH but OI BULLISH - Checking news...")
+            else:
+                conflict = False
+            
+            # ✅ NEWS TIE-BREAKER
+            final_bias = chart_bias  # Chart takes priority by default
+            
+            if conflict:
+                if news_data and news_data.is_relevant and news_data.impact_score > 70:
+                    logger.info(f"  📰 Using NEWS to break tie: {news_data.sentiment}")
+                    if news_data.sentiment == oi_bias:
+                        final_bias = oi_bias  # News supports OI
+                        logger.info(f"  ✅ News confirms OI sentiment")
+                    else:
+                        logger.info(f"  ⚠️ Conflicting signals persist - WAIT recommended")
+                        final_bias = "WAIT"
+                else:
+                    # No strong news - chart priority but reduce confidence
+                    logger.info(f"  ⚠️ No strong news - Chart priority but low confidence")
+            
             url = "https://api.deepseek.com/v1/chat/completions"
             headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
             
             news_section = ""
-            if news_data:
-                news_section = f"\n📰 NEWS: {news_data.sentiment} | Impact: {news_data.impact_score}/100\n"
+            if news_data and news_data.is_relevant:
+                news_section = f"\n📰 RELEVANT NEWS: {news_data.sentiment} | Impact: {news_data.impact_score}/100\n"
             
-            prompt = f"""Analyze {symbol} for F&O trading with SMART OI tracking.
+            # ✅ STRICT RULES IN PROMPT
+            prompt = f"""Analyze {symbol} with STRICT SIGNAL RULES.
 
 SPOT: ₹{spot_price:.2f}
 1H: {trend_1h['trend']} ({trend_1h['strength']}%)
 15M: {pattern_15m['pattern']} | {pattern_15m['signal']}
 5M: Entry ₹{entry_5m['entry']:.2f}
 
-OI ANALYSIS ({oi_timeframe} comparison):
+OI ANALYSIS ({oi_timeframe}):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 Sentiment: {aggregate.overall_sentiment}
 CE OI Change: {aggregate.ce_oi_change_pct:+.1f}%
@@ -994,9 +1068,21 @@ PE OI Change: {aggregate.pe_oi_change_pct:+.1f}%
 PCR: {aggregate.pcr:.2f}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 {news_section}
+⚠️ CRITICAL RULES (MUST FOLLOW):
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. IF 1H BULLISH + 15M BULLISH → ONLY "PE_BUY"
+2. IF 1H BEARISH + 15M BEARISH → ONLY "CE_BUY"
+3. IF 1H and 15M conflict → "WAIT"
+4. IF Chart vs OI conflict + no strong news (>70) → "WAIT"
+5. Chart structure > OI sentiment (unless news breaks tie)
+
+PRE-CALCULATED BIAS: {final_bias}
+Use this bias for opportunity field.
+
 Reply JSON only:
 {{
-  "opportunity": "PE_BUY" or "CE_BUY" or "WAIT",
+  "opportunity": "{final_bias}_BUY" if {final_bias} != "WAIT" else "WAIT",
+  "signal_reason": "Brief explanation why this signal",
   "confidence": 82,
   "chart_score": 42,
   "option_score": 45,
@@ -1022,13 +1108,13 @@ Reply JSON only:
   "tf_5m_entry": {entry_5m['entry']:.2f},
   "tf_alignment": "STRONG" or "MODERATE" or "WEAK",
   "news_sentiment": "{news_data.sentiment if news_data else 'NEUTRAL'}",
-  "news_impact": {news_data.impact_score if news_data else 0}
+  "news_impact": {news_data.impact_score if news_data and news_data.is_relevant else 0}
 }}"""
 
             payload = {
                 "model": "deepseek-chat",
                 "messages": [
-                    {"role": "system", "content": "F&O trader. Reply JSON only."},
+                    {"role": "system", "content": "F&O trader. STRICTLY follow signal rules. Reply JSON only."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.3,
@@ -1045,6 +1131,22 @@ Reply JSON only:
             
             if not analysis_dict:
                 return None
+            
+            # ✅ POST-VALIDATION: Double-check AI didn't violate rules
+            ai_opportunity = analysis_dict.get('opportunity', 'WAIT')
+            
+            if chart_bias == "BULLISH" and ai_opportunity == "CE_BUY":
+                logger.error(f"  ❌ AI VIOLATED RULE: Chart BULLISH but AI said CE_BUY - FORCING PE_BUY")
+                analysis_dict['opportunity'] = "PE_BUY"
+                analysis_dict['signal_reason'] = "CORRECTED: Chart bullish structure"
+            elif chart_bias == "BEARISH" and ai_opportunity == "PE_BUY":
+                logger.error(f"  ❌ AI VIOLATED RULE: Chart BEARISH but AI said PE_BUY - FORCING CE_BUY")
+                analysis_dict['opportunity'] = "CE_BUY"
+                analysis_dict['signal_reason'] = "CORRECTED: Chart bearish structure"
+            elif conflict and final_bias == "WAIT" and ai_opportunity != "WAIT":
+                logger.error(f"  ❌ AI VIOLATED RULE: Conflict detected but AI gave trade - FORCING WAIT")
+                analysis_dict['opportunity'] = "WAIT"
+                analysis_dict['signal_reason'] = "CORRECTED: Chart-OI conflict"
             
             return DeepAnalysis(
                 opportunity=analysis_dict.get('opportunity', 'WAIT'),
@@ -1074,10 +1176,12 @@ Reply JSON only:
                 tf_alignment=analysis_dict.get('tf_alignment', 'WEAK'),
                 news_sentiment=analysis_dict.get('news_sentiment', 'NEUTRAL'),
                 news_impact=analysis_dict.get('news_impact', 0),
-                oi_timeframe_used=oi_timeframe
+                oi_timeframe_used=oi_timeframe,
+                signal_reason=analysis_dict.get('signal_reason', 'Multi-TF analysis')
             )
         except Exception as e:
             logger.error(f"AI analysis error: {e}")
+            traceback.print_exc()
             return None
 
 class TelegramNotifier:
@@ -1094,14 +1198,23 @@ class TelegramNotifier:
             finnhub = "🟢" if self.api_status['finnhub'] else "🔴"
             deepseek = "🟢" if self.api_status['deepseek'] else "🔴"
             
-            msg = f"""🔥 HYBRID BOT v16.0 🔥
+            msg = f"""🔥 HYBRID BOT v16.1 - FIXED 🔥
+
+════════════════════════
+🛠️ CRITICAL FIXES:
+════════════════════════
+✅ Chart Structure > OI Priority
+✅ BULLISH Chart → Only PE_BUY
+✅ BEARISH Chart → Only CE_BUY
+✅ Conflicts → WAIT or News Tie-breaker
+✅ Relevant News Filtering Only
 
 ════════════════════════
 API STATUS:
 ════════════════════════
 {upstox} Upstox
 {redis} Redis
-{finnhub} Finnhub News
+{finnhub} Finnhub News (Filtered)
 {deepseek} DeepSeek AI
 🟢 Telegram
 
@@ -1117,12 +1230,9 @@ BOT INFO:
 
 ✅ Multi-Timeframe (1H→15M→5M)
 ✅ 400+ Candlesticks
-✅ SMART OI Tracking:
-   • Indices: 30min (fast)
-   • Liquid Stocks: 2hr (buildup)
-✅ Finnhub News Intelligence
-✅ Redis OI Tracking
-✅ AI Analysis
+✅ SMART OI Tracking
+✅ Sector-Relevant News Only
+✅ AI with Signal Validation
 
 ════════════════════════
 🟢 BOT RUNNING
@@ -1142,8 +1252,10 @@ Waiting for market hours...
             emoji, sig = sig_map.get(analysis.opportunity, ("⚪", "WAIT"))
             
             news_sec = ""
-            if news and analysis.news_impact > 50:
-                news_sec = f"\n📰 {news.headline}\nSentiment: {news.sentiment} | Impact: {news.impact_score}/100\n"
+            if news and news.is_relevant and analysis.news_impact > 50:
+                news_sec = f"\n📰✅ RELEVANT: {news.headline}\nSentiment: {news.sentiment} | Impact: {news.impact_score}/100\n"
+            elif news and not news.is_relevant:
+                news_sec = f"\n📰❌ Irrelevant news ignored\n"
             
             alert = f"""🎯 {symbol} SIGNAL
 
@@ -1153,6 +1265,8 @@ Waiting for market hours...
 CONFIDENCE: {analysis.confidence}%
 SCORE: {analysis.total_score}/125
 TF ALIGNMENT: {analysis.tf_alignment}
+════════════════════════
+💡 REASON: {analysis.signal_reason}
 ════════════════════════
 {news_sec}
 1H: {analysis.tf_1h_trend}
@@ -1189,7 +1303,7 @@ Time: {datetime.now(IST).strftime('%H:%M:%S')} IST
             chart = ChartGenerator.create_chart(mtf, symbol, spot, analysis, aggregate)
             if chart:
                 await self.bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=chart,
-                                         caption=f"📈 {symbol} | {emoji} {sig} | OI:{analysis.oi_timeframe_used}")
+                                         caption=f"📈 {symbol} | {emoji} {sig} | {analysis.signal_reason[:40]}")
             
             logger.info(f"✅ Alert sent: {symbol}")
         except Exception as e:
@@ -1208,10 +1322,10 @@ Alerts: {alerts}
             pass
 
 class HybridBot:
-    """Main bot - BANK NIFTY & SENSEX + Smart OI"""
+    """Main bot - BANK NIFTY & MIDCAP NIFTY + Fixed Signal Logic"""
     
     def __init__(self):
-        logger.info("Initializing Bot v16.0...")
+        logger.info("Initializing Bot v16.1 - FIXED VERSION...")
         
         self.redis = RedisCache()
         self.fetcher = UpstoxDataFetcher()
@@ -1233,7 +1347,7 @@ class HybridBot:
         self.total_scanned = 0
         self.alerts_sent = 0
         
-        logger.info("✅ Bot initialized!")
+        logger.info("✅ Bot initialized with FIXED signal logic!")
     
     def is_market_open(self) -> bool:
         now = datetime.now(IST)
@@ -1247,7 +1361,7 @@ class HybridBot:
         logger.info("="*50)
         
         # Market news once per cycle
-        market_news = self.finnhub.get_market_news(5)
+        market_news = self.finnhub.get_market_news(10)
         
         alerts = 0
         
@@ -1260,8 +1374,9 @@ class HybridBot:
                 symbol = info['name']
                 expiry_day = info.get('expiry_day', 3)
                 oi_timeframe = info.get('oi_timeframe', '30min')
+                sector = info.get('sector', 'INDEX')
                 
-                logger.info(f"\n🔍 {symbol} (OI: {oi_timeframe})")
+                logger.info(f"\n🔍 {symbol} ({sector}) - OI: {oi_timeframe}")
                 
                 # Get data
                 spot = self.fetcher.get_spot_price(key)
@@ -1291,36 +1406,67 @@ class HybridBot:
                 entry_5m = self.chart_analyzer.analyze_5m_entry(mtf.df_5m)
                 sr = self.chart_analyzer.calculate_support_resistance(mtf.df_15m)
                 
-                # News
+                # ✅ News with relevance filtering
                 news_data = None
                 if market_news:
-                    news_data = self.news_analyzer.analyze_news_sentiment(symbol, market_news)
+                    news_data = self.news_analyzer.analyze_news_sentiment(symbol, sector, market_news)
+                    if news_data:
+                        logger.info(f"  📰✅ Relevant news found: {news_data.sentiment} ({news_data.impact_score})")
                 
-                # TF alignment check
-                aligned = False
+                # ✅ NEW: Enhanced alignment check
+                chart_aligned = False
                 if trend_1h['trend'] == 'BULLISH' and pattern_15m['signal'] == 'BULLISH':
-                    aligned = True
+                    chart_aligned = True
+                    logger.info(f"  ✅ Chart aligned: BULLISH")
                 elif trend_1h['trend'] == 'BEARISH' and pattern_15m['signal'] == 'BEARISH':
-                    aligned = True
-                elif news_data and news_data.impact_score > 75:
-                    aligned = True
+                    chart_aligned = True
+                    logger.info(f"  ✅ Chart aligned: BEARISH")
                 
-                if not aligned:
-                    logger.info(f"  ❌ Not aligned")
-                    continue
+                # Check conflicts
+                oi_sentiment = aggregate.overall_sentiment
+                conflict_detected = False
                 
-                # AI analysis with smart OI timeframe
+                if chart_aligned:
+                    if (trend_1h['trend'] == 'BULLISH' and oi_sentiment == 'BEARISH'):
+                        conflict_detected = True
+                        logger.warning(f"  ⚠️ CONFLICT: Chart BULLISH vs OI BEARISH")
+                    elif (trend_1h['trend'] == 'BEARISH' and oi_sentiment == 'BULLISH'):
+                        conflict_detected = True
+                        logger.warning(f"  ⚠️ CONFLICT: Chart BEARISH vs OI BULLISH")
+                
+                # Skip if not aligned and no strong news
+                if not chart_aligned:
+                    if not news_data or news_data.impact_score < 75:
+                        logger.info(f"  ❌ Not aligned, skipping")
+                        continue
+                    else:
+                        logger.info(f"  📰 Strong news overrides alignment requirement")
+                
+                # AI analysis with FIXED logic
                 deep = self.ai_analyzer.deep_analysis(symbol, spot, mtf, aggregate, trend_1h, 
                                                       pattern_15m, entry_5m, sr, news_data, oi_timeframe)
                 if not deep:
                     continue
                 
+                logger.info(f"  💡 Signal: {deep.opportunity} | Reason: {deep.signal_reason}")
+                
                 # Filters
                 if deep.opportunity == "WAIT":
+                    logger.info(f"  ⚪ WAIT signal")
                     continue
                 if deep.confidence < CONFIDENCE_MIN:
+                    logger.info(f"  ❌ Low confidence: {deep.confidence}%")
                     continue
                 if deep.total_score < SCORE_MIN:
+                    logger.info(f"  ❌ Low score: {deep.total_score}")
+                    continue
+                
+                # ✅ FINAL VALIDATION: Ensure signal matches chart structure
+                if trend_1h['trend'] == 'BULLISH' and deep.opportunity == 'CE_BUY':
+                    logger.error(f"  ❌ FATAL: Signal CE_BUY contradicts BULLISH chart - SKIPPING")
+                    continue
+                elif trend_1h['trend'] == 'BEARISH' and deep.opportunity == 'PE_BUY':
+                    logger.error(f"  ❌ FATAL: Signal PE_BUY contradicts BEARISH chart - SKIPPING")
                     continue
                 
                 # Send alert
@@ -1331,7 +1477,8 @@ class HybridBot:
                 await asyncio.sleep(3)
                 
             except Exception as e:
-                logger.error(f"Error: {e}")
+                logger.error(f"Error scanning {symbol}: {e}")
+                traceback.print_exc()
             
             await asyncio.sleep(1)
         
@@ -1340,7 +1487,7 @@ class HybridBot:
     
     async def run(self):
         logger.info("="*50)
-        logger.info("BOT v16.0 - BANK NIFTY & MIDCAP NIFTY + SMART OI")
+        logger.info("BOT v16.1 - FIXED SIGNAL LOGIC")
         logger.info("="*50)
         
         await self.notifier.send_startup_message()
@@ -1357,9 +1504,11 @@ class HybridBot:
                 await asyncio.sleep(SCAN_INTERVAL)
                 
             except KeyboardInterrupt:
+                logger.info("Bot stopped by user")
                 break
             except Exception as e:
                 logger.error(f"Loop error: {e}")
+                traceback.print_exc()
                 await asyncio.sleep(60)
 
 async def main():
@@ -1368,6 +1517,6 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("="*50)
-    logger.info("STARTING BOT v16.0...")
+    logger.info("STARTING BOT v16.1 - FIXED VERSION...")
     logger.info("="*50)
     asyncio.run(main())
