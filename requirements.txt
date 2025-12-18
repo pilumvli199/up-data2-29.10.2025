@@ -1,9 +1,9 @@
+# Core Dependencies
 requests==2.31.0
 pandas==2.1.4
-matplotlib==3.8.2
-python-telegram-bot==20.7
-asyncio==3.4.3
-Pillow==10.1.0
 numpy==1.26.2
-pytz==2024.1
-redis==5.0.1
+pytz==2023.3
+schedule==1.2.1
+
+# Optional but recommended
+python-dateutil==2.8.2
