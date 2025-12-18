@@ -29,6 +29,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 import schedule
 import sys
+import os
 
 # ============================================================================
 # SECTION 1: CONFIGURATION
@@ -38,9 +39,10 @@ class Config:
     """All configuration in one place"""
     
     # ==================== UPSTOX API ====================
-    UPSTOX_API_KEY = "your_api_key_here"
-    UPSTOX_API_SECRET = "your_secret_here"
-    UPSTOX_ACCESS_TOKEN = "your_access_token_here"  # Get from OAuth
+    # Use environment variables for security (Gemini recommendation)
+    UPSTOX_API_KEY = os.getenv('UPSTOX_API_KEY', 'your_api_key_here')
+    UPSTOX_API_SECRET = os.getenv('UPSTOX_API_SECRET', 'your_secret_here')
+    UPSTOX_ACCESS_TOKEN = os.getenv('UPSTOX_ACCESS_TOKEN', 'your_access_token_here')
     
     # Upstox API Endpoints (Official Documentation)
     UPSTOX_BASE_URL = "https://api.upstox.com/v2"
@@ -49,13 +51,14 @@ class Config:
     ENDPOINTS = {
         'option_chain': '/option/chain',
         'market_quote': '/market-quote/quotes',
-        'historical': '/historical-candle',
+        'historical': '/historical-candle',  # For 500 candles
+        'intraday': '/historical-candle/intraday',  # For live candles
         'profile': '/user/profile'
     }
     
     # ==================== TELEGRAM ====================
-    TELEGRAM_BOT_TOKEN = "your_telegram_bot_token"
-    TELEGRAM_CHAT_ID = "your_chat_id"
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'your_telegram_bot_token')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', 'your_chat_id')
     
     # ==================== TRADING PARAMETERS ====================
     SYMBOL = "NIFTY"
@@ -99,6 +102,7 @@ class Config:
     # ==================== MEMORY SETTINGS ====================
     MAX_HISTORY_MINUTES = 120  # Keep 2 hours of data
     OI_HISTORY_SIZE = 120  # Store 120 snapshots
+    CANDLE_HISTORY_SIZE = 500  # Store 500 candles for analysis
 
 
 # ============================================================================
@@ -157,10 +161,110 @@ class UpstoxDataManager:
         # In-memory storage
         self.oi_history = deque(maxlen=Config.OI_HISTORY_SIZE)
         self.price_history = deque(maxlen=Config.OI_HISTORY_SIZE)
+        self.candle_history = deque(maxlen=Config.CANDLE_HISTORY_SIZE)  # NEW: 500 candles
         self.current_option_chain = None
         self.current_expiry = None
         
         logger.info("✅ UpstoxDataManager initialized")
+    
+    def get_historical_candles(self, interval: str = '5minute', days: int = 5) -> Optional[pd.DataFrame]:
+        """
+        Fetch historical candle data for price action analysis
+        
+        Upstox API: GET /historical-candle/{instrument_key}/{interval}/{to_date}
+        Intervals: '1minute', '5minute', '15minute', '30minute', 'day'
+        
+        Returns 500 candles for comprehensive analysis
+        """
+        try:
+            # Calculate date range
+            to_date = datetime.now(Config.TIMEZONE)
+            from_date = to_date - timedelta(days=days)
+            
+            # Format instrument key
+            instrument_key = Config.INDEX_SYMBOL.replace('|', '%7C')  # URL encode
+            
+            # Build URL (Upstox format)
+            url = (f"{Config.UPSTOX_BASE_URL}"
+                   f"/historical-candle/{instrument_key}/"
+                   f"{interval}/"
+                   f"{to_date.strftime('%Y-%m-%d')}")
+            
+            logger.info(f"📊 Fetching {interval} candles...")
+            response = requests.get(url, headers=self.headers)
+            
+            if response.status_code != 200:
+                logger.error(f"Historical API error: {response.status_code}")
+                return None
+            
+            data = response.json()
+            
+            if data['status'] != 'success':
+                logger.error(f"API error: {data}")
+                return None
+            
+            # Parse candles
+            candles = data['data']['candles']
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+            
+            # Convert timestamp
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Store in memory (last 500)
+            for _, row in df.tail(500).iterrows():
+                self.candle_history.append(row.to_dict())
+            
+            logger.info(f"✅ Loaded {len(df)} candles (Stored: {len(self.candle_history)})")
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ Historical candle fetch error: {e}")
+            return None
+    
+    def get_intraday_candles(self, interval: str = '5minute') -> Optional[pd.DataFrame]:
+        """
+        Fetch live intraday candles
+        
+        Upstox API: GET /historical-candle/intraday/{instrument_key}/{interval}
+        """
+        try:
+            instrument_key = Config.INDEX_SYMBOL.replace('|', '%7C')
+            
+            url = (f"{Config.UPSTOX_BASE_URL}"
+                   f"/historical-candle/intraday/{instrument_key}/{interval}")
+            
+            response = requests.get(url, headers=self.headers)
+            
+            if response.status_code != 200:
+                logger.error(f"Intraday API error: {response.status_code}")
+                return None
+            
+            data = response.json()
+            
+            if data['status'] != 'success':
+                return None
+            
+            candles = data['data']['candles']
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Update candle history with latest
+            latest_candle = df.iloc[-1].to_dict()
+            
+            # Update or append
+            if self.candle_history and \
+               self.candle_history[-1]['timestamp'] == latest_candle['timestamp']:
+                self.candle_history[-1] = latest_candle  # Update last candle
+            else:
+                self.candle_history.append(latest_candle)  # New candle
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Intraday candle error: {e}")
+            return None
     
     def get_current_expiry(self) -> str:
         """
@@ -644,21 +748,35 @@ class PriceActionAnalyzer:
     def detect_breakout(self, current_price: float) -> Dict:
         """
         Detect if price has broken resistance or support
+        GEMINI FIX: Added volume confirmation
         """
         try:
-            if len(self.dm.price_history) < 20:
-                return {'type': 'NONE', 'level': 0}
+            if len(self.dm.candle_history) < 20:
+                return {'type': 'NONE', 'level': 0, 'volume_confirmed': False}
             
-            recent_prices = [p['ltp'] for p in list(self.dm.price_history)[-20:]]
-            recent_high = max(recent_prices[:-1])  # Exclude current
-            recent_low = min(recent_prices[:-1])
+            # Get recent candles
+            recent_candles = list(self.dm.candle_history)[-20:]
+            recent_prices = [c['close'] for c in recent_candles[:-1]]
+            recent_volumes = [c['volume'] for c in recent_candles]
+            
+            recent_high = max(recent_prices)
+            recent_low = min(recent_prices)
+            
+            # Calculate average volume
+            avg_volume = np.mean(recent_volumes[:-1])
+            current_volume = recent_volumes[-1]
+            
+            # Volume surge check (Gemini recommendation)
+            volume_surge = current_volume > avg_volume * 1.5  # 50% above average
             
             # Bullish breakout
             if current_price > recent_high * 1.001:  # 0.1% above
                 return {
                     'type': 'BULLISH_BREAKOUT',
                     'level': recent_high,
-                    'strength': 'STRONG'
+                    'strength': 'STRONG' if volume_surge else 'WEAK',
+                    'volume_confirmed': volume_surge,
+                    'volume_ratio': current_volume / avg_volume if avg_volume > 0 else 0
                 }
             
             # Bearish breakdown
@@ -666,14 +784,16 @@ class PriceActionAnalyzer:
                 return {
                     'type': 'BEARISH_BREAKDOWN',
                     'level': recent_low,
-                    'strength': 'STRONG'
+                    'strength': 'STRONG' if volume_surge else 'WEAK',
+                    'volume_confirmed': volume_surge,
+                    'volume_ratio': current_volume / avg_volume if avg_volume > 0 else 0
                 }
             
-            return {'type': 'NONE', 'level': 0}
+            return {'type': 'NONE', 'level': 0, 'volume_confirmed': False}
             
         except Exception as e:
             logger.error(f"Breakout detection error: {e}")
-            return {'type': 'NONE', 'level': 0}
+            return {'type': 'NONE', 'level': 0, 'volume_confirmed': False}
     
     def calculate_vwap(self) -> Optional[float]:
         """Calculate VWAP from price history"""
@@ -698,7 +818,7 @@ class PriceActionAnalyzer:
     
     def get_price_action_signal(self, current_price: float) -> Dict:
         """
-        Combined price action signal
+        Combined price action signal with volume confirmation
         """
         trend = self.detect_trend()
         breakout = self.detect_breakout(current_price)
@@ -713,28 +833,44 @@ class PriceActionAnalyzer:
             'confidence': 0
         }
         
-        # Bullish confirmation
+        # Bullish confirmation (with volume - Gemini fix)
         if (trend == "UPTREND" and 
             breakout['type'] == 'BULLISH_BREAKOUT' and
+            breakout['volume_confirmed'] and  # NEW: Volume check
             (vwap is None or current_price > vwap)):
             signal['bullish'] = True
-            signal['confidence'] = 85
+            signal['confidence'] = 90  # Higher confidence with volume
         
-        # Bearish confirmation
+        # Bullish without volume
+        elif (trend == "UPTREND" and 
+              breakout['type'] == 'BULLISH_BREAKOUT' and
+              (vwap is None or current_price > vwap)):
+            signal['bullish'] = True
+            signal['confidence'] = 75  # Lower without volume
+        
+        # Bearish confirmation (with volume)
+        elif (trend == "DOWNTREND" and 
+              breakout['type'] == 'BEARISH_BREAKDOWN' and
+              breakout['volume_confirmed'] and
+              (vwap is None or current_price < vwap)):
+            signal['bearish'] = True
+            signal['confidence'] = 90
+        
+        # Bearish without volume
         elif (trend == "DOWNTREND" and 
               breakout['type'] == 'BEARISH_BREAKDOWN' and
               (vwap is None or current_price < vwap)):
             signal['bearish'] = True
-            signal['confidence'] = 85
+            signal['confidence'] = 75
         
         # Partial signals
         elif trend == "UPTREND" and (vwap is None or current_price > vwap):
             signal['bullish'] = True
-            signal['confidence'] = 65
+            signal['confidence'] = 60
         
         elif trend == "DOWNTREND" and (vwap is None or current_price < vwap):
             signal['bearish'] = True
-            signal['confidence'] = 65
+            signal['confidence'] = 60
         
         return signal
 
@@ -934,16 +1070,37 @@ class SignalEngine:
     
     def _get_option_premium(self, chain_df: pd.DataFrame, strike: int, 
                             signal_type: str) -> float:
-        """Get option premium for given strike"""
-        row = chain_df[chain_df['Strike'] == strike]
-        
-        if row.empty:
+        """
+        Get option premium for given strike
+        GEMINI FIX: Better error handling
+        """
+        try:
+            row = chain_df[chain_df['Strike'] == strike]
+            
+            if row.empty:
+                logger.warning(f"⚠️ Strike {strike} not found in chain")
+                # Find nearest strike
+                chain_df['diff'] = abs(chain_df['Strike'] - strike)
+                nearest_row = chain_df.loc[chain_df['diff'].idxmin()]
+                strike = nearest_row['Strike']
+                logger.info(f"Using nearest strike: {strike}")
+                row = chain_df[chain_df['Strike'] == strike]
+            
+            if 'CE' in signal_type:
+                premium = row['CE_LTP'].values[0]
+            else:
+                premium = row['PE_LTP'].values[0]
+            
+            # Validation
+            if premium <= 0 or premium > 1000:
+                logger.error(f"❌ Invalid premium: {premium} for strike {strike}")
+                return 0
+            
+            return float(premium)
+            
+        except Exception as e:
+            logger.error(f"❌ Premium fetch error: {e}")
             return 0
-        
-        if 'CE' in signal_type:
-            return row['CE_LTP'].values[0]
-        else:
-            return row['PE_LTP'].values[0]
     
     def reset_daily_count(self):
         """Reset signal count at market open"""
@@ -1063,6 +1220,16 @@ class UpstoxOIBot:
         try:
             logger.info("🔧 Testing connections...")
             
+            # Validate environment variables
+            if Config.UPSTOX_ACCESS_TOKEN == 'your_access_token_here':
+                logger.error("❌ UPSTOX_ACCESS_TOKEN not set!")
+                logger.info("Set environment variable: export UPSTOX_ACCESS_TOKEN='your_token'")
+                return False
+            
+            if Config.TELEGRAM_BOT_TOKEN == 'your_telegram_bot_token':
+                logger.error("❌ TELEGRAM_BOT_TOKEN not set!")
+                return False
+            
             # Test Upstox connection
             expiry = self.data_manager.get_current_expiry()
             if not expiry:
@@ -1071,8 +1238,18 @@ class UpstoxOIBot:
             
             logger.info(f"✅ Upstox connection OK (Expiry: {expiry})")
             
+            # Load historical candles for price action
+            logger.info("📊 Loading historical candles...")
+            candles = self.data_manager.get_historical_candles(interval='5minute', days=5)
+            
+            if candles is None or len(candles) < 100:
+                logger.warning("⚠️ Could not load sufficient historical data")
+                logger.info("Bot will start collecting data from market open")
+            else:
+                logger.info(f"✅ Loaded {len(candles)} candles for analysis")
+            
             # Test Telegram
-            self.alerter.send_status("✅ Bot initialized and ready!")
+            self.alerter.send_status("✅ Bot initialized and ready! 🚀")
             logger.info("✅ Telegram connection OK")
             
             # Store expiry
@@ -1167,6 +1344,9 @@ class UpstoxOIBot:
             
             # Fetch price for history building
             self.data_manager.get_current_price()
+            
+            # Fetch latest intraday candle (for volume analysis)
+            self.data_manager.get_intraday_candles(interval='5minute')
             
         except Exception as e:
             logger.error(f"Data fetch error: {e}")
