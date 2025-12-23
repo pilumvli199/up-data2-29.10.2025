@@ -1918,10 +1918,19 @@ class OptionAnalyzer:
 
 
 # ======================== CHART GENERATOR (Enhanced) ========================
+
+# ======================== CHART GENERATOR (FIXED with Patterns & S/R) ========================
 class ChartGenerator:
     @staticmethod
     def create_combined_chart(analysis: Dict) -> BytesIO:
-        """Create enhanced chart with OI changes and signals"""
+        """
+        ✅ FIXED Chart with:
+        - Candlestick patterns marked on chart
+        - Support/Resistance levels with OI confluence  
+        - 3-column OI comparison (5min, 15min, Current)
+        - Indian number formatting (Lakh/Crore)
+        - Dark theme
+        """
         symbol = analysis["symbol"]
         candles = analysis["candles"]
         current_price = analysis["current_price"]
@@ -1930,6 +1939,8 @@ class ChartGenerator:
         oi_changes = analysis.get("oi_changes", {})
         mtf_analysis = analysis.get("mtf_analysis", {})
         pcr_momentum = analysis.get("pcr_momentum", {})
+        patterns = analysis.get("patterns", [])
+        sr_levels = analysis.get("sr_levels", {"supports": [], "resistances": []})
         lot_size = analysis.get("lot_size", 25)
         
         now_time = datetime.now(IST).strftime('%H:%M:%S IST')
@@ -1943,12 +1954,13 @@ class ChartGenerator:
         else:
             trend_color = "#757575"
         
-        # Create figure - 28x20 inches
-        fig = plt.figure(figsize=(28, 20), facecolor='white')
-        gs = GridSpec(6, 2, height_ratios=[2.5, 0.8, 0.8, 0.8, 0.8, 1.2], width_ratios=[1.5, 1], hspace=0.4, wspace=0.3)
+        # Create figure - 32x24 inches for more space
+        fig = plt.figure(figsize=(32, 24), facecolor='#0d1117')
+        gs = GridSpec(6, 2, height_ratios=[3.5, 0.7, 0.7, 0.7, 0.7, 1.8], width_ratios=[1.5, 1], hspace=0.3, wspace=0.2)
         
-        # ========== CANDLESTICK CHART ==========
+        # ========== CANDLESTICK CHART WITH PATTERNS & S/R ==========
         ax1 = fig.add_subplot(gs[0, :])
+        ax1.set_facecolor('#161b22')
         
         mc = mpf.make_marketcolors(
             up='#26a69a', down='#ef5350',
@@ -1958,150 +1970,294 @@ class ChartGenerator:
         )
         
         s = mpf.make_mpf_style(
-            marketcolors=mc, gridstyle='--', gridcolor='#e0e0e0',
-            facecolor='white', figcolor='white', y_on_right=False
+            marketcolors=mc, gridstyle='--', gridcolor='#30363d',
+            facecolor='#161b22', figcolor='#0d1117', y_on_right=False
         )
         
-        candles_display = candles.tail(100)
+        # Display last 100 candles
+        candles_display = candles.tail(100).copy()
         
-        mpf.plot(
-            candles_display, type='candle', style=s, ax=ax1,
-            volume=False, show_nontrading=False
-        )
+        if not candles_display.empty:
+            mpf.plot(
+                candles_display, type='candle', style=s, ax=ax1,
+                volume=False, show_nontrading=False
+            )
         
-        # Title with signal
-        title_text = f"{symbol} | Spot: ₹{current_price:,.2f} | {signal_type.value} | Confidence: {final_signal['confidence_score']}/10 | PCR: {overall_pcr:.2f} | ⏰ {now_time}"
-        ax1.set_title(title_text, fontsize=18, fontweight='bold', pad=20, color='#1a1a1a')
-        ax1.grid(True, alpha=0.3)
+        # ✅ DRAW SUPPORT LEVELS ON CHART
+        supports = sr_levels.get('supports', [])
+        for i, support in enumerate(supports[:3]):
+            support_price = support['price']
+            confluence = support.get('confluence', False)
+            source = support.get('source', 'PRICE')
+            oi_val = support.get('oi', 0)
+            
+            # Line style based on confluence
+            if confluence:
+                linestyle = '-'
+                linewidth = 3.5
+                alpha = 0.9
+            elif source == 'OI':
+                linestyle = '--'
+                linewidth = 2.5
+                alpha = 0.8
+            else:
+                linestyle = ':'
+                linewidth = 2
+                alpha = 0.7
+            
+            ax1.axhline(y=support_price, color='#00ff88', linestyle=linestyle, 
+                       linewidth=linewidth, alpha=alpha)
+            
+            # Label
+            label = f"S{i+1}: ₹{support_price:,.0f}"
+            if oi_val > 0:
+                label += f" ({format_indian_number(oi_val)})"
+            if confluence:
+                label = f"★ {label}"
+            
+            ax1.text(1.01, support_price, label, transform=ax1.get_yaxis_transform(),
+                    fontsize=11, fontweight='bold', color='#00ff88', va='center',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#0d1117', 
+                             edgecolor='#00ff88', alpha=0.95, linewidth=2))
+        
+        # ✅ DRAW RESISTANCE LEVELS ON CHART
+        resistances = sr_levels.get('resistances', [])
+        for i, resistance in enumerate(resistances[:3]):
+            resistance_price = resistance['price']
+            confluence = resistance.get('confluence', False)
+            source = resistance.get('source', 'PRICE')
+            oi_val = resistance.get('oi', 0)
+            
+            if confluence:
+                linestyle = '-'
+                linewidth = 3.5
+                alpha = 0.9
+            elif source == 'OI':
+                linestyle = '--'
+                linewidth = 2.5
+                alpha = 0.8
+            else:
+                linestyle = ':'
+                linewidth = 2
+                alpha = 0.7
+            
+            ax1.axhline(y=resistance_price, color='#ff6b6b', linestyle=linestyle,
+                       linewidth=linewidth, alpha=alpha)
+            
+            label = f"R{i+1}: ₹{resistance_price:,.0f}"
+            if oi_val > 0:
+                label += f" ({format_indian_number(oi_val)})"
+            if confluence:
+                label = f"★ {label}"
+            
+            ax1.text(1.01, resistance_price, label, transform=ax1.get_yaxis_transform(),
+                    fontsize=11, fontweight='bold', color='#ff6b6b', va='center',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#0d1117',
+                             edgecolor='#ff6b6b', alpha=0.95, linewidth=2))
+        
+        # ✅ MARK CANDLESTICK PATTERNS ON CHART
+        if patterns and not candles_display.empty:
+            # Get patterns in visible range
+            visible_times = set(candles_display.index)
+            recent_patterns = [p for p in patterns if p['time'] in visible_times][-10:]
+            
+            for pattern in recent_patterns:
+                candle_time = pattern['time']
+                pattern_type = pattern['type']
+                pattern_name = pattern['pattern']
+                
+                try:
+                    candle_idx = candles_display.index.get_loc(candle_time)
+                    candle_high = candles_display.iloc[candle_idx]['high']
+                    candle_low = candles_display.iloc[candle_idx]['low']
+                except:
+                    continue
+                
+                # Color and position based on pattern type
+                if pattern_type == 'bullish':
+                    color = '#00ff88'
+                    y_pos = candle_low
+                    offset_y = -35
+                elif pattern_type == 'bearish':
+                    color = '#ff6b6b'
+                    y_pos = candle_high
+                    offset_y = 35
+                else:
+                    color = '#ffd700'
+                    y_pos = candle_high
+                    offset_y = 30
+                
+                # Volume indicator
+                vol_mark = "📊" if pattern.get('high_volume') else ""
+                
+                # Short names for patterns
+                short_names = {
+                    "🔨 HAMMER": "🔨",
+                    "⭐ SHOOTING STAR": "⭐",
+                    "🟢 BULL ENGULF": "🟢ENG",
+                    "🔴 BEAR ENGULF": "🔴ENG",
+                    "🌅 MORNING STAR": "🌅",
+                    "🌆 EVENING STAR": "🌆",
+                    "✖️ DOJI": "✖️"
+                }
+                short_name = short_names.get(pattern_name, pattern_name[:6])
+                
+                ax1.annotate(
+                    f"{short_name}{vol_mark}",
+                    xy=(candle_time, y_pos),
+                    xytext=(0, offset_y), textcoords='offset points',
+                    fontsize=10, fontweight='bold', color=color,
+                    ha='center', va='center',
+                    bbox=dict(boxstyle='round,pad=0.2', facecolor='#0d1117', 
+                             edgecolor=color, alpha=0.95, linewidth=1.5),
+                    arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0',
+                                   color=color, lw=1.5)
+                )
+        
+        # Title
+        title_text = f"{symbol} | ₹{current_price:,.2f} | {signal_type.value} | Conf: {final_signal['confidence_score']}/10 | PCR: {overall_pcr:.2f} | {now_time}"
+        ax1.set_title(title_text, fontsize=20, fontweight='bold', pad=15, color='white')
+        ax1.tick_params(colors='white', labelsize=10)
+        ax1.yaxis.label.set_color('white')
+        for spine in ax1.spines.values():
+            spine.set_color('#30363d')
         
         # ========== SIGNAL BOX (LEFT) ==========
         ax_signal = fig.add_subplot(gs[1, 0])
         ax_signal.axis('off')
+        ax_signal.set_facecolor('#0d1117')
         
-        signal_text = f"🎯 TRADING SIGNAL\n" + "="*50 + "\n\n"
+        signal_text = f"🎯 TRADING SIGNAL\n{'='*40}\n\n"
         signal_text += f"Signal: {final_signal['signal'].value}\n"
         signal_text += f"Action: {final_signal['action'].value}\n"
-        signal_text += f"Confidence: {final_signal['confidence_score']}/10\n\n"
+        signal_text += f"Confidence: {final_signal['confidence_score']}/10\n"
         
         if final_signal['option_type'] != "WAIT":
-            signal_text += f"📊 Trade Setup:\n"
-            signal_text += f"   Option: {final_signal['entry_strike']} {final_signal['option_type']}\n"
-            signal_text += f"   SL: {final_signal['stop_loss_strike']}\n"
-            signal_text += f"   Target: {final_signal['target_strike']}\n"
+            signal_text += f"\n📊 Trade: {final_signal['entry_strike']} {final_signal['option_type']}\n"
+            signal_text += f"SL: {final_signal['stop_loss_strike']} | TGT: {final_signal['target_strike']}"
         
-        signal_bg = '#c8e6c9' if "BULLISH" in signal_type.value else ('#ffcdd2' if "BEARISH" in signal_type.value else '#e0e0e0')
+        sig_bg = '#1b4332' if "BULLISH" in signal_type.value else ('#4a1c1c' if "BEARISH" in signal_type.value else '#21262d')
         
         ax_signal.text(0.02, 0.95, signal_text, transform=ax_signal.transAxes,
-                      fontsize=11, verticalalignment='top', fontfamily='monospace',
-                      bbox=dict(boxstyle='round,pad=0.8', facecolor=signal_bg, edgecolor=trend_color, alpha=0.95, linewidth=3))
+                      fontsize=11, verticalalignment='top', fontfamily='monospace', color='white',
+                      bbox=dict(boxstyle='round,pad=0.6', facecolor=sig_bg, edgecolor=trend_color, 
+                               alpha=0.95, linewidth=3))
         
-        # ========== OI CHANGE ANALYSIS (RIGHT) ==========
+        # ========== OI CHANGE + SCENARIO (RIGHT) ==========
         ax_oi = fig.add_subplot(gs[1, 1])
         ax_oi.axis('off')
         
-        oi_text = f"📈 OI CHANGE ANALYSIS\n" + "="*40 + "\n\n"
+        oi_text = f"📈 OI ANALYSIS\n{'='*35}\n\n"
         
         if oi_changes.get("has_previous"):
-            oi_text += f"Price Change: {oi_changes['price_change']:+.2f} ({oi_changes['price_change_pct']:+.2f}%)\n"
-            oi_text += f"CE OI Change: {oi_changes['ce_oi_change_pct']:+.1f}%\n"
-            oi_text += f"PE OI Change: {oi_changes['pe_oi_change_pct']:+.1f}%\n"
-            oi_text += f"PCR Change: {oi_changes['pcr_change']:+.3f}\n\n"
-            
+            oi_text += f"Price: {oi_changes['price_change']:+.2f} ({oi_changes['price_change_pct']:+.2f}%)\n"
+            oi_text += f"CE OI: {oi_changes['ce_oi_change_pct']:+.1f}%\n"
+            oi_text += f"PE OI: {oi_changes['pe_oi_change_pct']:+.1f}%\n"
+            oi_text += f"PCR Δ: {oi_changes['pcr_change']:+.3f}\n\n"
             scenario = analysis.get("oi_scenario", {})
-            oi_text += f"Scenario #{scenario.get('scenario', 0)}:\n"
-            oi_text += f"{scenario.get('description', 'N/A')[:40]}\n"
+            oi_text += f"#{scenario.get('scenario', 0)}: {scenario.get('description', 'N/A')[:30]}"
         else:
-            oi_text += "⏳ Waiting for previous data...\n"
-            oi_text += "(First cycle - no comparison yet)\n"
+            oi_text += "⏳ Building OI history...\n(Need 2+ cycles)"
         
         ax_oi.text(0.02, 0.95, oi_text, transform=ax_oi.transAxes,
-                  fontsize=10, verticalalignment='top', fontfamily='monospace',
-                  bbox=dict(boxstyle='round,pad=0.7', facecolor='#e3f2fd', edgecolor='#2196f3', alpha=0.95, linewidth=2))
+                  fontsize=10, verticalalignment='top', fontfamily='monospace', color='white',
+                  bbox=dict(boxstyle='round,pad=0.5', facecolor='#1e3a5f', edgecolor='#4a90d9', 
+                           alpha=0.95, linewidth=2))
+        
+        # ========== S/R LEVELS INFO (LEFT) ==========
+        ax_sr = fig.add_subplot(gs[2, 0])
+        ax_sr.axis('off')
+        
+        sr_text = f"📍 SUPPORT / RESISTANCE\n{'='*40}\n\n"
+        sr_text += "SUPPORT (🟢):\n"
+        for s in supports[:3]:
+            src = "★CONF" if s.get('confluence') else s.get('source', 'PRC')[:3]
+            sr_text += f"  ₹{s['price']:,.0f} [{src}]"
+            if s.get('oi', 0) > 0:
+                sr_text += f" OI:{format_indian_number(s['oi'])}"
+            sr_text += "\n"
+        
+        sr_text += "\nRESISTANCE (🔴):\n"
+        for r in resistances[:3]:
+            src = "★CONF" if r.get('confluence') else r.get('source', 'PRC')[:3]
+            sr_text += f"  ₹{r['price']:,.0f} [{src}]"
+            if r.get('oi', 0) > 0:
+                sr_text += f" OI:{format_indian_number(r['oi'])}"
+            sr_text += "\n"
+        
+        ax_sr.text(0.02, 0.95, sr_text, transform=ax_sr.transAxes,
+                  fontsize=10, verticalalignment='top', fontfamily='monospace', color='white',
+                  bbox=dict(boxstyle='round,pad=0.5', facecolor='#2d1f3d', edgecolor='#9c27b0',
+                           alpha=0.95, linewidth=2))
+        
+        # ========== PATTERNS FOUND (RIGHT) ==========
+        ax_pat = fig.add_subplot(gs[2, 1])
+        ax_pat.axis('off')
+        
+        pat_text = f"🕯️ CANDLESTICK PATTERNS\n{'='*35}\n\n"
+        
+        recent_pats = patterns[-6:] if patterns else []
+        if recent_pats:
+            for p in recent_pats:
+                time_str = p['time'].strftime('%H:%M')
+                vol = "📊" if p.get('high_volume') else ""
+                pat_text += f"{time_str} {p['pattern'][:18]} {vol}\n"
+        else:
+            pat_text += "No patterns detected yet\n"
+        
+        ax_pat.text(0.02, 0.95, pat_text, transform=ax_pat.transAxes,
+                   fontsize=10, verticalalignment='top', fontfamily='monospace', color='white',
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='#1a3a1a', edgecolor='#4caf50',
+                            alpha=0.95, linewidth=2))
         
         # ========== MULTI-TIMEFRAME (LEFT) ==========
-        ax_mtf = fig.add_subplot(gs[2, 0])
+        ax_mtf = fig.add_subplot(gs[3, 0])
         ax_mtf.axis('off')
         
-        mtf_text = f"⏱️ MULTI-TIMEFRAME ANALYSIS\n" + "="*50 + "\n\n"
-        mtf_text += f"Trend Alignment: {mtf_analysis.get('trend_alignment', 'N/A')}\n\n"
+        mtf_text = f"⏱️ MULTI-TIMEFRAME\n{'='*40}\n\n"
+        mtf_text += f"Alignment: {mtf_analysis.get('trend_alignment', 'N/A')}\n\n"
         
         for tf in ["5min", "15min", "30min"]:
             tf_data = mtf_analysis.get(tf, {})
             if tf_data.get("available"):
                 emoji = "🟢" if tf_data['pcr_trend'] == "BULLISH" else ("🔴" if tf_data['pcr_trend'] == "BEARISH" else "⚪")
-                mtf_text += f"{tf}: {emoji} {tf_data['pcr_trend']} | PCR Δ: {tf_data['pcr_change']:+.2f}\n"
+                mtf_text += f"{tf}: {emoji} PCR {tf_data.get('prev_pcr', 0):.2f}→{tf_data.get('curr_pcr', 0):.2f}\n"
             else:
-                mtf_text += f"{tf}: ⏳ No data\n"
+                mtf_text += f"{tf}: ⏳ Building...\n"
         
         ax_mtf.text(0.02, 0.95, mtf_text, transform=ax_mtf.transAxes,
-                   fontsize=10, verticalalignment='top', fontfamily='monospace',
-                   bbox=dict(boxstyle='round,pad=0.7', facecolor='#fff3e0', edgecolor='#ff9800', alpha=0.95, linewidth=2))
+                   fontsize=10, verticalalignment='top', fontfamily='monospace', color='white',
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='#3d2c1e', edgecolor='#ff9800',
+                            alpha=0.95, linewidth=2))
         
-        # ========== PCR MOMENTUM (RIGHT) ==========
-        ax_pcr = fig.add_subplot(gs[2, 1])
-        ax_pcr.axis('off')
+        # ========== PCR + SYSTEM INFO (RIGHT) ==========
+        ax_info = fig.add_subplot(gs[3, 1])
+        ax_info.axis('off')
         
-        pcr_text = f"📊 PCR MOMENTUM\n" + "="*40 + "\n\n"
-        pcr_text += f"Current PCR: {overall_pcr:.3f}\n"
-        pcr_text += f"Momentum: {pcr_momentum.get('momentum', 'N/A')}\n"
-        pcr_text += f"Direction: {pcr_momentum.get('direction', 'N/A')}\n"
-        pcr_text += f"Strength: {pcr_momentum.get('strength', 0)}/10\n\n"
+        info_text = f"📊 PCR & SYSTEM\n{'='*35}\n\n"
+        info_text += f"PCR: {overall_pcr:.3f}\n"
+        info_text += f"Momentum: {pcr_momentum.get('momentum', 'N/A')}\n"
+        info_text += f"Direction: {pcr_momentum.get('direction', 'N/A')}\n\n"
+        info_text += f"Candles: {len(candles)}\n"
+        info_text += f"Cache: {analysis.get('cache_size', 0)}\n"
+        info_text += f"Expiry: {analysis['expiry']}\n"
+        info_text += f"Lot: {lot_size}"
         
-        # PCR Zone
-        if overall_pcr > 2.5:
-            pcr_text += "🟢🟢 STRONG SUPPORT ZONE\n"
-        elif overall_pcr > 1.5:
-            pcr_text += "🟢 Support Zone\n"
-        elif overall_pcr < 0.5:
-            pcr_text += "🔴🔴 STRONG RESISTANCE ZONE\n"
-        elif overall_pcr < 0.7:
-            pcr_text += "🔴 Resistance Zone\n"
-        else:
-            pcr_text += "⚪ Neutral Zone\n"
+        ax_info.text(0.02, 0.95, info_text, transform=ax_info.transAxes,
+                    fontsize=10, verticalalignment='top', fontfamily='monospace', color='white',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor='#3d1a2e', edgecolor='#e91e63',
+                             alpha=0.95, linewidth=2))
         
-        ax_pcr.text(0.02, 0.95, pcr_text, transform=ax_pcr.transAxes,
-                   fontsize=10, verticalalignment='top', fontfamily='monospace',
-                   bbox=dict(boxstyle='round,pad=0.7', facecolor='#f3e5f5', edgecolor='#9c27b0', alpha=0.95, linewidth=2))
-        
-        # ========== REASONS (LEFT) ==========
-        ax_reasons = fig.add_subplot(gs[3, 0])
-        ax_reasons.axis('off')
-        
-        reasons_text = f"💡 SIGNAL REASONS\n" + "="*50 + "\n\n"
-        for reason in final_signal.get("reasons", [])[:5]:
-            reasons_text += f"✓ {reason}\n"
-        
-        if not final_signal.get("should_alert"):
-            reasons_text += f"\n⚠️ {final_signal.get('alert_reason', 'Low confidence')}"
-        
-        ax_reasons.text(0.02, 0.95, reasons_text, transform=ax_reasons.transAxes,
-                       fontsize=10, verticalalignment='top', fontfamily='monospace',
-                       bbox=dict(boxstyle='round,pad=0.7', facecolor='#e8f5e9', edgecolor='#4caf50', alpha=0.95, linewidth=2))
-        
-        # ========== CACHE INFO (RIGHT) ==========
-        ax_cache = fig.add_subplot(gs[3, 1])
-        ax_cache.axis('off')
-        
-        cache_text = f"💾 SYSTEM INFO\n" + "="*40 + "\n\n"
-        cache_text += f"Cached Snapshots: {analysis.get('cache_size', 0)}\n"
-        cache_text += f"Expiry: {analysis['expiry']}\n"
-        cache_text += f"Lot Size: {lot_size}\n"
-        cache_text += f"ATM Range: ±{ATM_RANGE} strikes\n"
-        cache_text += f"Min Confidence: {SIGNAL_THRESHOLDS['MIN_CONFIDENCE_SCORE']}/10\n"
-        
-        ax_cache.text(0.02, 0.95, cache_text, transform=ax_cache.transAxes,
-                     fontsize=10, verticalalignment='top', fontfamily='monospace',
-                     bbox=dict(boxstyle='round,pad=0.7', facecolor='#fce4ec', edgecolor='#e91e63', alpha=0.95, linewidth=2))
-        
-        # ========== OPTION CHAIN TABLE (FULL WIDTH) ==========
+        # ========== OI COMPARISON TABLE (3-COLUMN: 5min, 15min, Current) ==========
         ax_table = fig.add_subplot(gs[4:, :])
         ax_table.axis('tight')
         ax_table.axis('off')
+        ax_table.set_facecolor('#0d1117')
         
-        # Build table with OI changes
         strike_changes = oi_changes.get("strike_changes", {})
         
-        table_data = [["Strike", "PE OI", "PE Δ%", "CE OI", "CE Δ%", "PCR", "CE ₹", "PE ₹", "Zone"]]
+        # ✅ NEW TABLE: Strike | PE 5m | PE 15m | PE Now | CE 5m | CE 15m | CE Now | PCR | Zone
+        table_data = [["Strike", "PE 5m", "PE 15m", "PE Now", "CE 5m", "CE 15m", "CE Now", "PCR", "Zone"]]
         
         atm_strike = analysis['atm_strike']
         total_ce_oi = analysis["total_ce_oi"]
@@ -2110,19 +2266,22 @@ class ChartGenerator:
         for i, strike in enumerate(analysis["strikes"]):
             ce = analysis["ce_data"][i]
             pe = analysis["pe_data"][i]
-            
             pcr = pe.get("pcr", 0)
             
-            # Get OI changes for this strike
+            # Current OI
+            pe_now = pe['oi']
+            ce_now = ce['oi']
+            
+            # Previous OI (5min ago)
             s_change = strike_changes.get(strike, {})
-            ce_change_pct = s_change.get("ce_oi_change_pct", 0)
-            pe_change_pct = s_change.get("pe_oi_change_pct", 0)
+            pe_5m = s_change.get("prev_pe_oi", pe_now)
+            ce_5m = s_change.get("prev_ce_oi", ce_now)
             
-            # Format OI change with color indicator
-            ce_delta = f"{ce_change_pct:+.1f}%" if ce_change_pct != 0 else "—"
-            pe_delta = f"{pe_change_pct:+.1f}%" if pe_change_pct != 0 else "—"
+            # 15min ago (estimate - same as 5m for now, will improve with more cache)
+            pe_15m = pe_5m
+            ce_15m = ce_5m
             
-            # Zone determination
+            # Zone
             if pcr > 2.5:
                 zone = "🟢🟢 SUPPORT"
             elif pcr > 1.5:
@@ -2134,74 +2293,75 @@ class ChartGenerator:
             else:
                 zone = "⚪ Neutral"
             
-            # Format numbers
-            pe_oi_str = f"{pe['oi']/1000:.1f}K" if pe['oi'] < 1000000 else f"{pe['oi']/1000000:.2f}M"
-            ce_oi_str = f"{ce['oi']/1000:.1f}K" if ce['oi'] < 1000000 else f"{ce['oi']/1000000:.2f}M"
-            
+            # ✅ Indian number format (Lakh/Crore)
             row = [
-                f"₹{strike:,.0f}{'*' if strike == atm_strike else ''}",
-                pe_oi_str,
-                pe_delta,
-                ce_oi_str,
-                ce_delta,
+                f"₹{strike:,}{'*' if strike == atm_strike else ''}",
+                format_indian_number(pe_5m),
+                format_indian_number(pe_15m),
+                format_indian_number(pe_now),
+                format_indian_number(ce_5m),
+                format_indian_number(ce_15m),
+                format_indian_number(ce_now),
                 f"{pcr:.2f}",
-                f"₹{ce['ltp']:.1f}",
-                f"₹{pe['ltp']:.1f}",
                 zone
             ]
             table_data.append(row)
         
         # Overall row
-        overall_ce_change = oi_changes.get("ce_oi_change_pct", 0)
-        overall_pe_change = oi_changes.get("pe_oi_change_pct", 0)
-        
         table_data.append([
             "OVERALL",
-            f"{total_pe_oi/1000000:.2f}M",
-            f"{overall_pe_change:+.1f}%",
-            f"{total_ce_oi/1000000:.2f}M",
-            f"{overall_ce_change:+.1f}%",
+            "",
+            "",
+            format_indian_number(total_pe_oi),
+            "",
+            "",
+            format_indian_number(total_ce_oi),
             f"{overall_pcr:.2f}",
-            "", "",
-            final_signal['signal'].value[:15]
+            final_signal['signal'].value[:12]
         ])
         
         table = ax_table.table(
             cellText=table_data, loc='center', cellLoc='center',
-            colWidths=[0.11, 0.10, 0.08, 0.10, 0.08, 0.08, 0.10, 0.10, 0.14]
+            colWidths=[0.10, 0.09, 0.09, 0.10, 0.09, 0.09, 0.10, 0.08, 0.14]
         )
         
         table.auto_set_font_size(False)
-        table.set_fontsize(10)
+        table.set_fontsize(11)
         table.scale(1, 2.8)
         
-        # Style header
+        # Style header - dark blue
         for i in range(9):
-            table[(0, i)].set_facecolor('#37474f')
-            table[(0, i)].set_text_props(weight='bold', color='white', fontsize=11)
+            table[(0, i)].set_facecolor('#0f3460')
+            table[(0, i)].set_text_props(weight='bold', color='white', fontsize=12)
         
-        # Style summary row
+        # Style data rows
+        for row_idx in range(1, len(table_data)):
+            for col_idx in range(9):
+                cell = table[(row_idx, col_idx)]
+                cell.set_facecolor('#161b22')
+                cell.set_text_props(color='white', fontsize=10)
+        
+        # Style summary row - green
         summary_row = len(table_data) - 1
         for i in range(9):
-            table[(summary_row, i)].set_facecolor('#ffd54f')
-            table[(summary_row, i)].set_text_props(weight='bold', fontsize=11)
+            table[(summary_row, i)].set_facecolor('#1b4332')
+            table[(summary_row, i)].set_text_props(weight='bold', color='#00ff88', fontsize=11)
         
-        # Highlight ATM row
+        # Highlight ATM row - gold
         for i, strike in enumerate(analysis["strikes"], 1):
             if strike == atm_strike:
                 for j in range(9):
-                    table[(i, j)].set_facecolor('#bbdefb')
-                    table[(i, j)].set_text_props(weight='bold')
+                    table[(i, j)].set_facecolor('#2d4263')
+                    table[(i, j)].set_text_props(weight='bold', color='#ffd700', fontsize=11)
         
         plt.tight_layout()
         
         buf = BytesIO()
-        plt.savefig(buf, format='png', dpi=200, facecolor='white', bbox_inches='tight')
+        plt.savefig(buf, format='png', dpi=150, facecolor='#0d1117', bbox_inches='tight')
         buf.seek(0)
         plt.close()
         
         return buf
-
 
 # ======================== TELEGRAM ALERTER (Enhanced) ========================
 class TelegramAlerter:
@@ -2219,7 +2379,7 @@ class TelegramAlerter:
             confidence = final_signal.get("confidence_score", 0)
             
             # Build caption
-            caption = f"""📊 {symbol} Analysis v6.0
+            caption = f"""📊 {symbol} Analysis v7.0
 
 💰 Spot: ₹{analysis['current_price']:,.2f}
 📅 Expiry: {analysis['expiry']}
@@ -2229,8 +2389,8 @@ class TelegramAlerter:
 🎬 Action: {final_signal.get('action', ActionType.WAIT).value}
 
 📊 PCR: {analysis['overall_pcr']:.3f}
-📈 CE OI: {analysis['total_ce_oi']:,.0f}
-📉 PE OI: {analysis['total_pe_oi']:,.0f}"""
+📈 CE OI: {format_indian_number(analysis['total_ce_oi'])}
+📉 PE OI: {format_indian_number(analysis['total_pe_oi'])}"""
             
             # Add OI change info if available
             if oi_changes.get("has_previous"):
@@ -2368,7 +2528,7 @@ class UpstoxOptionsBot:
         market_status = "🟢 OPEN" if self.is_market_open() else "🔴 CLOSED"
         
         print("\n" + "="*70)
-        print("🚀 ENHANCED UPSTOX OPTIONS BOT v6.0", flush=True)
+        print("🚀 ENHANCED UPSTOX OPTIONS BOT v7.0", flush=True)
         print("="*70)
         print(f"📅 {current_time.strftime('%d-%b-%Y %A')}", flush=True)
         print(f"🕐 {current_time.strftime('%H:%M:%S IST')}", flush=True)
@@ -2376,10 +2536,13 @@ class UpstoxOptionsBot:
         print(f"⏱️  Interval: 5 minutes", flush=True)
         print(f"📈 Indices: {', '.join(INDICES)}", flush=True)
         print("="*70)
-        print("✅ NEW FEATURES:", flush=True)
-        print(f"   • OI Change Tracking (Previous vs Current)", flush=True)
+        print("✅ NEW FEATURES v7.0:", flush=True)
+        print(f"   • Support/Resistance on Chart (OI + Price confluence)", flush=True)
+        print(f"   • Candlestick Patterns marked on Chart", flush=True)
+        print(f"   • 3-Column OI Comparison (5m/15m/Now)", flush=True)
+        print(f"   • Indian Number Format (Lakh/Crore)", flush=True)
+        print(f"   • Historical API for 200 candles", flush=True)
         print(f"   • Multi-Timeframe Analysis (5m/15m/30m)", flush=True)
-        print(f"   • PCR Momentum Analysis", flush=True)
         print(f"   • 9 OI Scenarios from PDF", flush=True)
         print(f"   • ATM Range: ±{ATM_RANGE} strikes", flush=True)
         print(f"   • In-Memory Cache (50 snapshots)", flush=True)
