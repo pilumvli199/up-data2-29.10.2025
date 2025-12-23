@@ -31,8 +31,69 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID")
 
 # Trading params
 ANALYSIS_INTERVAL = 5 * 60  # 5 minutes
-CANDLES_COUNT = 200
-ATM_RANGE = 3  # ✅ CHANGED: ±3 strikes (was ±2)
+CANDLES_COUNT = 200  # ✅ 200 candles for chart
+ATM_RANGE = 3  # ±3 strikes
+
+
+# ======================== INDIAN NUMBER FORMATTING ========================
+def format_indian_number(num: float, decimal_places: int = 2) -> str:
+    """
+    ✅ Format number in Indian style (Lakh/Crore)
+    1 Lakh = 1,00,000
+    1 Crore = 1,00,00,000
+    """
+    if num is None or num == 0:
+        return "0"
+    
+    abs_num = abs(num)
+    sign = "-" if num < 0 else ""
+    
+    if abs_num >= 10000000:  # 1 Crore = 10 Million
+        value = abs_num / 10000000
+        if value >= 100:
+            return f"{sign}{value:.0f}Cr"
+        elif value >= 10:
+            return f"{sign}{value:.1f}Cr"
+        else:
+            return f"{sign}{value:.2f}Cr"
+    elif abs_num >= 100000:  # 1 Lakh = 100 Thousand
+        value = abs_num / 100000
+        if value >= 100:
+            return f"{sign}{value:.0f}L"
+        elif value >= 10:
+            return f"{sign}{value:.1f}L"
+        else:
+            return f"{sign}{value:.2f}L"
+    elif abs_num >= 1000:  # Thousands
+        value = abs_num / 1000
+        return f"{sign}{value:.1f}K"
+    else:
+        return f"{sign}{abs_num:.{decimal_places}f}"
+
+
+def format_indian_number_full(num: float) -> str:
+    """Format with full Indian comma separation"""
+    if num is None:
+        return "0"
+    
+    num = int(num)
+    sign = "-" if num < 0 else ""
+    num = abs(num)
+    
+    s = str(num)
+    if len(s) <= 3:
+        return sign + s
+    
+    # Last 3 digits
+    result = s[-3:]
+    s = s[:-3]
+    
+    # Then groups of 2
+    while s:
+        result = s[-2:] + "," + result
+        s = s[:-2]
+    
+    return sign + result
 
 # ✅ NEW: Signal Thresholds - Only alert when these thresholds crossed
 SIGNAL_THRESHOLDS = {
@@ -81,6 +142,500 @@ LOT_SIZES = {
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# ======================== CANDLESTICK PATTERN DETECTION ========================
+class CandlestickPatterns:
+    """
+    ✅ TOP 6 STRONGEST CANDLESTICK PATTERNS
+    Detects patterns and marks them on chart
+    """
+    
+    @staticmethod
+    def is_hammer(row, prev_row=None) -> Tuple[bool, str, str]:
+        """Hammer - Strong Bullish Reversal"""
+        body = abs(row['close'] - row['open'])
+        upper_wick = row['high'] - max(row['open'], row['close'])
+        lower_wick = min(row['open'], row['close']) - row['low']
+        total_range = row['high'] - row['low']
+        
+        if total_range == 0:
+            return False, "", ""
+        
+        if (lower_wick > body * 2 and 
+            upper_wick < body * 0.3 and 
+            body < total_range * 0.35):
+            return True, "🔨 HAMMER", "BULLISH"
+        return False, "", ""
+    
+    @staticmethod
+    def is_shooting_star(row, prev_row=None) -> Tuple[bool, str, str]:
+        """Shooting Star - Strong Bearish Reversal"""
+        body = abs(row['close'] - row['open'])
+        upper_wick = row['high'] - max(row['open'], row['close'])
+        lower_wick = min(row['open'], row['close']) - row['low']
+        total_range = row['high'] - row['low']
+        
+        if total_range == 0:
+            return False, "", ""
+        
+        if (upper_wick > body * 2 and 
+            lower_wick < body * 0.3 and 
+            body < total_range * 0.35):
+            return True, "⭐ SHOOTING STAR", "BEARISH"
+        return False, "", ""
+    
+    @staticmethod
+    def is_engulfing(row, prev_row) -> Tuple[bool, str, str]:
+        """Bullish/Bearish Engulfing - Very Strong"""
+        if prev_row is None:
+            return False, "", ""
+        
+        curr_body = abs(row['close'] - row['open'])
+        prev_body = abs(prev_row['close'] - prev_row['open'])
+        
+        # Bullish engulfing
+        if (row['close'] > row['open'] and 
+            prev_row['close'] < prev_row['open'] and
+            row['open'] <= prev_row['close'] and
+            row['close'] >= prev_row['open'] and
+            curr_body > prev_body * 1.1):
+            return True, "🟢 BULL ENGULF", "BULLISH"
+        
+        # Bearish engulfing
+        if (row['close'] < row['open'] and 
+            prev_row['close'] > prev_row['open'] and
+            row['open'] >= prev_row['close'] and
+            row['close'] <= prev_row['open'] and
+            curr_body > prev_body * 1.1):
+            return True, "🔴 BEAR ENGULF", "BEARISH"
+        
+        return False, "", ""
+    
+    @staticmethod
+    def is_morning_star(df, idx) -> Tuple[bool, str, str]:
+        """Morning Star - Strong Bullish Reversal (3 candle pattern)"""
+        if idx < 2:
+            return False, "", ""
+        
+        first = df.iloc[idx-2]
+        second = df.iloc[idx-1]
+        third = df.iloc[idx]
+        
+        first_body = abs(first['close'] - first['open'])
+        second_body = abs(second['close'] - second['open'])
+        
+        first_red = first['close'] < first['open']
+        second_small = second_body < first_body * 0.3
+        third_green = third['close'] > third['open']
+        third_closes_high = third['close'] > (first['open'] + first['close']) / 2
+        
+        if first_red and second_small and third_green and third_closes_high:
+            return True, "🌅 MORNING STAR", "BULLISH"
+        return False, "", ""
+    
+    @staticmethod
+    def is_evening_star(df, idx) -> Tuple[bool, str, str]:
+        """Evening Star - Strong Bearish Reversal (3 candle pattern)"""
+        if idx < 2:
+            return False, "", ""
+        
+        first = df.iloc[idx-2]
+        second = df.iloc[idx-1]
+        third = df.iloc[idx]
+        
+        first_body = abs(first['close'] - first['open'])
+        second_body = abs(second['close'] - second['open'])
+        
+        first_green = first['close'] > first['open']
+        second_small = second_body < first_body * 0.3
+        third_red = third['close'] < third['open']
+        third_closes_low = third['close'] < (first['open'] + first['close']) / 2
+        
+        if first_green and second_small and third_red and third_closes_low:
+            return True, "🌆 EVENING STAR", "BEARISH"
+        return False, "", ""
+    
+    @staticmethod
+    def is_doji(row, prev_row=None) -> Tuple[bool, str, str]:
+        """Doji - Indecision/Reversal Warning"""
+        body = abs(row['close'] - row['open'])
+        total_range = row['high'] - row['low']
+        
+        if total_range == 0:
+            return False, "", ""
+        
+        if body < total_range * 0.1:
+            return True, "✖️ DOJI", "NEUTRAL"
+        return False, "", ""
+    
+    @staticmethod
+    def detect_all_patterns(df: pd.DataFrame, volume_data: Dict = None) -> List[Dict]:
+        """
+        Detect all patterns in dataframe
+        Returns list of pattern dictionaries with index, pattern name, type, price
+        """
+        patterns = []
+        
+        for i in range(len(df)):
+            row = df.iloc[i]
+            prev_row = df.iloc[i-1] if i > 0 else None
+            
+            # Get volume (if available)
+            candle_volume = 0
+            if volume_data:
+                candle_volume = volume_data.get(row.name, 0)
+            
+            avg_volume = np.mean(list(volume_data.values())) if volume_data and len(volume_data) > 0 else 0
+            high_volume = candle_volume > avg_volume * 1.2 if avg_volume > 0 else False
+            
+            # Check patterns in order of strength
+            
+            # 1. Engulfing (strongest)
+            is_pat, name, bias = CandlestickPatterns.is_engulfing(row, prev_row)
+            if is_pat:
+                patterns.append({
+                    "index": i,
+                    "time": row.name,
+                    "pattern": name,
+                    "type": bias.lower(),
+                    "price": row['close'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "high_volume": high_volume,
+                    "strength": 5
+                })
+                continue
+            
+            # 2. Morning Star
+            is_pat, name, bias = CandlestickPatterns.is_morning_star(df, i)
+            if is_pat:
+                patterns.append({
+                    "index": i,
+                    "time": row.name,
+                    "pattern": name,
+                    "type": bias.lower(),
+                    "price": row['close'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "high_volume": high_volume,
+                    "strength": 5
+                })
+                continue
+            
+            # 3. Evening Star
+            is_pat, name, bias = CandlestickPatterns.is_evening_star(df, i)
+            if is_pat:
+                patterns.append({
+                    "index": i,
+                    "time": row.name,
+                    "pattern": name,
+                    "type": bias.lower(),
+                    "price": row['close'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "high_volume": high_volume,
+                    "strength": 5
+                })
+                continue
+            
+            # 4. Hammer
+            is_pat, name, bias = CandlestickPatterns.is_hammer(row, prev_row)
+            if is_pat:
+                patterns.append({
+                    "index": i,
+                    "time": row.name,
+                    "pattern": name,
+                    "type": bias.lower(),
+                    "price": row['close'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "high_volume": high_volume,
+                    "strength": 4
+                })
+                continue
+            
+            # 5. Shooting Star
+            is_pat, name, bias = CandlestickPatterns.is_shooting_star(row, prev_row)
+            if is_pat:
+                patterns.append({
+                    "index": i,
+                    "time": row.name,
+                    "pattern": name,
+                    "type": bias.lower(),
+                    "price": row['close'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "high_volume": high_volume,
+                    "strength": 4
+                })
+                continue
+            
+            # 6. Doji
+            is_pat, name, bias = CandlestickPatterns.is_doji(row, prev_row)
+            if is_pat:
+                patterns.append({
+                    "index": i,
+                    "time": row.name,
+                    "pattern": name,
+                    "type": bias.lower(),
+                    "price": row['close'],
+                    "high": row['high'],
+                    "low": row['low'],
+                    "high_volume": high_volume,
+                    "strength": 3
+                })
+        
+        return patterns
+
+
+# ======================== SUPPORT/RESISTANCE WITH OI CONFLUENCE ========================
+class SupportResistanceAnalyzer:
+    """
+    ✅ S/R Detection using BOTH Price Action + OI Data
+    Combines chart pivots with OI concentration zones
+    """
+    
+    @staticmethod
+    def find_pivot_points(df: pd.DataFrame, window: int = 5) -> Tuple[List, List]:
+        """Find pivot highs and lows from price data"""
+        pivot_highs = []
+        pivot_lows = []
+        
+        for i in range(window, len(df) - window):
+            # Check for pivot high
+            is_pivot_high = True
+            is_pivot_low = True
+            
+            current_high = df.iloc[i]['high']
+            current_low = df.iloc[i]['low']
+            
+            for j in range(i - window, i + window + 1):
+                if j == i:
+                    continue
+                if df.iloc[j]['high'] >= current_high:
+                    is_pivot_high = False
+                if df.iloc[j]['low'] <= current_low:
+                    is_pivot_low = False
+            
+            if is_pivot_high:
+                pivot_highs.append({
+                    "index": i,
+                    "time": df.index[i],
+                    "price": current_high,
+                    "type": "resistance"
+                })
+            
+            if is_pivot_low:
+                pivot_lows.append({
+                    "index": i,
+                    "time": df.index[i],
+                    "price": current_low,
+                    "type": "support"
+                })
+        
+        return pivot_highs, pivot_lows
+    
+    @staticmethod
+    def cluster_levels(levels: List[float], tolerance_pct: float = 0.3) -> List[Dict]:
+        """Cluster nearby price levels into zones"""
+        if not levels:
+            return []
+        
+        sorted_levels = sorted(levels)
+        clusters = []
+        current_cluster = [sorted_levels[0]]
+        
+        for level in sorted_levels[1:]:
+            # Check if within tolerance of cluster
+            cluster_avg = np.mean(current_cluster)
+            if abs(level - cluster_avg) / cluster_avg * 100 < tolerance_pct:
+                current_cluster.append(level)
+            else:
+                # Save current cluster and start new
+                clusters.append({
+                    "price": np.mean(current_cluster),
+                    "touches": len(current_cluster),
+                    "strength": len(current_cluster)
+                })
+                current_cluster = [level]
+        
+        # Don't forget last cluster
+        clusters.append({
+            "price": np.mean(current_cluster),
+            "touches": len(current_cluster),
+            "strength": len(current_cluster)
+        })
+        
+        return clusters
+    
+    @staticmethod
+    def identify_oi_based_levels(strikes_data: Dict, strike_interval: int) -> Dict:
+        """
+        ✅ Identify S/R levels from OI concentration
+        High PE OI = Support, High CE OI = Resistance
+        """
+        support_levels = []
+        resistance_levels = []
+        
+        # Find max OI for normalization
+        max_pe_oi = max([s.pe_oi for s in strikes_data.values()]) if strikes_data else 1
+        max_ce_oi = max([s.ce_oi for s in strikes_data.values()]) if strikes_data else 1
+        
+        for strike, data in strikes_data.items():
+            pe_oi_ratio = data.pe_oi / max_pe_oi if max_pe_oi > 0 else 0
+            ce_oi_ratio = data.ce_oi / max_ce_oi if max_ce_oi > 0 else 0
+            
+            # High PE OI = Strong Support
+            if pe_oi_ratio > 0.7:  # Top 30% PE OI
+                support_levels.append({
+                    "price": strike,
+                    "oi": data.pe_oi,
+                    "pcr": data.pcr,
+                    "oi_strength": pe_oi_ratio,
+                    "source": "OI"
+                })
+            
+            # High CE OI = Strong Resistance
+            if ce_oi_ratio > 0.7:  # Top 30% CE OI
+                resistance_levels.append({
+                    "price": strike,
+                    "oi": data.ce_oi,
+                    "pcr": data.pcr,
+                    "oi_strength": ce_oi_ratio,
+                    "source": "OI"
+                })
+        
+        return {
+            "oi_supports": sorted(support_levels, key=lambda x: x['oi'], reverse=True),
+            "oi_resistances": sorted(resistance_levels, key=lambda x: x['oi'], reverse=True)
+        }
+    
+    @staticmethod
+    def combine_price_and_oi_levels(
+        price_supports: List[Dict],
+        price_resistances: List[Dict],
+        oi_supports: List[Dict],
+        oi_resistances: List[Dict],
+        current_price: float,
+        strike_interval: int
+    ) -> Dict:
+        """
+        ✅ COMBINE Price Action S/R with OI-based S/R
+        Confluence = Stronger level
+        """
+        final_supports = []
+        final_resistances = []
+        
+        # Process supports
+        for ps in price_supports:
+            # Check if there's OI confluence
+            oi_match = None
+            for os in oi_supports:
+                if abs(ps['price'] - os['price']) <= strike_interval:
+                    oi_match = os
+                    break
+            
+            if oi_match:
+                # Confluence found!
+                final_supports.append({
+                    "price": (ps['price'] + oi_match['price']) / 2,
+                    "strength": ps['strength'] + 3,  # Bonus for confluence
+                    "touches": ps['touches'],
+                    "oi": oi_match.get('oi', 0),
+                    "pcr": oi_match.get('pcr', 0),
+                    "source": "CONFLUENCE",
+                    "confluence": True
+                })
+            else:
+                final_supports.append({
+                    "price": ps['price'],
+                    "strength": ps['strength'],
+                    "touches": ps['touches'],
+                    "oi": 0,
+                    "pcr": 0,
+                    "source": "PRICE",
+                    "confluence": False
+                })
+        
+        # Add OI-only supports not matched
+        for os in oi_supports:
+            matched = False
+            for fs in final_supports:
+                if abs(fs['price'] - os['price']) <= strike_interval:
+                    matched = True
+                    break
+            
+            if not matched:
+                final_supports.append({
+                    "price": os['price'],
+                    "strength": int(os['oi_strength'] * 3),
+                    "touches": 0,
+                    "oi": os['oi'],
+                    "pcr": os['pcr'],
+                    "source": "OI",
+                    "confluence": False
+                })
+        
+        # Process resistances similarly
+        for pr in price_resistances:
+            oi_match = None
+            for or_ in oi_resistances:
+                if abs(pr['price'] - or_['price']) <= strike_interval:
+                    oi_match = or_
+                    break
+            
+            if oi_match:
+                final_resistances.append({
+                    "price": (pr['price'] + oi_match['price']) / 2,
+                    "strength": pr['strength'] + 3,
+                    "touches": pr['touches'],
+                    "oi": oi_match.get('oi', 0),
+                    "pcr": oi_match.get('pcr', 0),
+                    "source": "CONFLUENCE",
+                    "confluence": True
+                })
+            else:
+                final_resistances.append({
+                    "price": pr['price'],
+                    "strength": pr['strength'],
+                    "touches": pr['touches'],
+                    "oi": 0,
+                    "pcr": 0,
+                    "source": "PRICE",
+                    "confluence": False
+                })
+        
+        # Add OI-only resistances
+        for or_ in oi_resistances:
+            matched = False
+            for fr in final_resistances:
+                if abs(fr['price'] - or_['price']) <= strike_interval:
+                    matched = True
+                    break
+            
+            if not matched:
+                final_resistances.append({
+                    "price": or_['price'],
+                    "strength": int(or_['oi_strength'] * 3),
+                    "touches": 0,
+                    "oi": or_['oi'],
+                    "pcr": or_['pcr'],
+                    "source": "OI",
+                    "confluence": False
+                })
+        
+        # Filter and sort
+        final_supports = [s for s in final_supports if s['price'] < current_price]
+        final_resistances = [r for r in final_resistances if r['price'] > current_price]
+        
+        final_supports = sorted(final_supports, key=lambda x: (x['confluence'], x['strength']), reverse=True)[:3]
+        final_resistances = sorted(final_resistances, key=lambda x: (x['confluence'], x['strength']), reverse=True)[:3]
+        
+        return {
+            "supports": final_supports,
+            "resistances": final_resistances
+        }
 
 
 # ======================== ENUMS FOR SIGNALS ========================
@@ -978,9 +1533,58 @@ class UpstoxClient:
         return quote["ltp"]
     
     async def get_historical_candles_combined(self, instrument_key: str) -> pd.DataFrame:
+        """
+        ✅ Get 200+ candles combining:
+        1. Historical daily API (for previous days)
+        2. Intraday API (for today)
+        """
         try:
             all_candles = []
             
+            # ========== PART 1: HISTORICAL DATA (Previous Days) ==========
+            # Get last 5 trading days of 5-min candles
+            today = datetime.now(IST).date()
+            
+            # Try to get historical data for previous days
+            for days_back in range(1, 6):  # Last 5 days
+                historical_date = today - timedelta(days=days_back)
+                
+                # Skip weekends
+                if historical_date.weekday() >= 5:
+                    continue
+                
+                date_str = historical_date.strftime('%Y-%m-%d')
+                
+                # ✅ Historical Candle API (V2)
+                # Format: /historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}
+                url_historical = f"{UPSTOX_API_V3_URL}/historical-candle/{instrument_key}/minutes/5/{date_str}/{date_str}"
+                
+                try:
+                    async with self.session.get(url_historical) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            if data.get("status") == "success" and data.get("data", {}).get("candles"):
+                                hist_candles = data["data"]["candles"]
+                                
+                                for candle in hist_candles:
+                                    all_candles.append({
+                                        'timestamp': pd.to_datetime(candle[0]),
+                                        'open': candle[1],
+                                        'high': candle[2],
+                                        'low': candle[3],
+                                        'close': candle[4],
+                                        'volume': candle[5] if len(candle) > 5 else 0,
+                                        'oi': candle[6] if len(candle) > 6 else 0
+                                    })
+                                
+                                logger.info(f"✅ Historical {date_str}: {len(hist_candles)} candles")
+                except Exception as e:
+                    logger.warning(f"⚠️ Historical data for {date_str} failed: {e}")
+                
+                await asyncio.sleep(0.1)  # Rate limit
+            
+            # ========== PART 2: INTRADAY DATA (Today) ==========
             url_intraday = f"{UPSTOX_API_V3_URL}/historical-candle/intraday/{instrument_key}/minutes/5"
             
             async with self.session.get(url_intraday) as response:
@@ -1000,20 +1604,30 @@ class UpstoxClient:
                             'oi': candle[6] if len(candle) > 6 else 0
                         })
                     
-                    logger.info(f"✅ Fetched {len(intraday_candles)} intraday candles")
+                    logger.info(f"✅ Intraday: {len(intraday_candles)} candles")
             
             if not all_candles:
+                logger.warning(f"⚠️ No candles found for {instrument_key}")
                 return pd.DataFrame()
             
+            # Create DataFrame and clean up
             df = pd.DataFrame(all_candles)
             df.set_index('timestamp', inplace=True)
             df = df.sort_index()
             df = df[~df.index.duplicated(keep='last')]
             
+            # ✅ Keep last 200 candles for chart
+            if len(df) > CANDLES_COUNT:
+                df = df.tail(CANDLES_COUNT)
+            
+            logger.info(f"✅ Total candles loaded: {len(df)} (Target: {CANDLES_COUNT})")
+            
             return df
             
         except Exception as e:
             logger.error(f"❌ Error fetching candles: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
     
     async def get_option_contracts(self, symbol: str, expiry: str) -> List[Dict]:
@@ -1121,12 +1735,14 @@ class OptionAnalyzer:
             
             logger.info(f"💰 {symbol} Spot: ₹{current_price:,.2f}")
             
-            # Get candles
+            # ✅ Get 200 candles (historical + intraday)
             candles = await self.client.get_historical_candles_combined(instrument_key)
             
             if candles.empty:
                 logger.warning(f"⚠️ No candle data for {symbol}")
                 return None
+            
+            logger.info(f"📈 Loaded {len(candles)} candles for {symbol}")
             
             # Get expiry
             expiries = await self.client.get_available_expiries(symbol)
@@ -1180,6 +1796,35 @@ class OptionAnalyzer:
             
             overall_pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
             atm_strike = round(current_price / self.get_strike_interval(symbol)) * self.get_strike_interval(symbol)
+            
+            # ✅ DETECT CANDLESTICK PATTERNS
+            volume_data = {candles.index[i]: candles.iloc[i].get('volume', 0) for i in range(len(candles))}
+            patterns = CandlestickPatterns.detect_all_patterns(candles, volume_data)
+            logger.info(f"🎯 Found {len(patterns)} candlestick patterns")
+            
+            # ✅ SUPPORT/RESISTANCE WITH OI CONFLUENCE
+            strike_interval = self.get_strike_interval(symbol)
+            
+            # Get price-based S/R
+            pivot_highs, pivot_lows = SupportResistanceAnalyzer.find_pivot_points(candles, window=5)
+            
+            price_supports = SupportResistanceAnalyzer.cluster_levels([p['price'] for p in pivot_lows])
+            price_resistances = SupportResistanceAnalyzer.cluster_levels([p['price'] for p in pivot_highs])
+            
+            # Get OI-based S/R
+            oi_levels = SupportResistanceAnalyzer.identify_oi_based_levels(strikes_data, strike_interval)
+            
+            # Combine both
+            sr_levels = SupportResistanceAnalyzer.combine_price_and_oi_levels(
+                price_supports,
+                price_resistances,
+                oi_levels['oi_supports'],
+                oi_levels['oi_resistances'],
+                current_price,
+                strike_interval
+            )
+            
+            logger.info(f"📊 S/R Levels: {len(sr_levels['supports'])} supports, {len(sr_levels['resistances'])} resistances")
             
             # ✅ CREATE SNAPSHOT AND CACHE IT
             current_snapshot = SymbolSnapshot(
@@ -1248,7 +1893,13 @@ class OptionAnalyzer:
                 "overall_pcr": overall_pcr,
                 "lot_size": LOT_SIZES.get(symbol, 25),
                 
-                # ✅ NEW ANALYSIS DATA
+                # ✅ CANDLESTICK PATTERNS
+                "patterns": patterns,
+                
+                # ✅ S/R LEVELS WITH OI CONFLUENCE
+                "sr_levels": sr_levels,
+                
+                # ✅ ANALYSIS DATA
                 "oi_changes": oi_changes,
                 "oi_scenario": oi_scenario,
                 "mtf_analysis": mtf_analysis,
