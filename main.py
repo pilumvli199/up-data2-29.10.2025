@@ -1954,9 +1954,9 @@ class ChartGenerator:
         else:
             trend_color = "#757575"
         
-        # Create figure - 32x24 inches for more space
-        fig = plt.figure(figsize=(32, 24), facecolor='#0d1117')
-        gs = GridSpec(6, 2, height_ratios=[3.5, 0.7, 0.7, 0.7, 0.7, 1.8], width_ratios=[1.5, 1], hspace=0.3, wspace=0.2)
+        # Create figure - 36x26 inches for 14 columns
+        fig = plt.figure(figsize=(36, 26), facecolor='#0d1117')
+        gs = GridSpec(6, 2, height_ratios=[3.0, 0.6, 0.6, 0.6, 0.6, 2.2], width_ratios=[1.5, 1], hspace=0.25, wspace=0.15)
         
         # ========== CANDLESTICK CHART WITH PATTERNS & S/R ==========
         ax1 = fig.add_subplot(gs[0, :])
@@ -2248,7 +2248,7 @@ class ChartGenerator:
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='#3d1a2e', edgecolor='#e91e63',
                              alpha=0.95, linewidth=2))
         
-        # ========== OI COMPARISON TABLE (FULL with PCR Chg, LTP, Vol) ==========
+        # ========== OI COMPARISON TABLE (14 COLUMNS - FULL DATA) ==========
         ax_table = fig.add_subplot(gs[4:, :])
         ax_table.axis('tight')
         ax_table.axis('off')
@@ -2256,15 +2256,24 @@ class ChartGenerator:
         
         strike_changes = oi_changes.get("strike_changes", {})
         
-        # ✅ UPDATED TABLE with PCR Change, LTP, Volume
-        # Headers: Strike | PE OI | CE OI | PCR | PCR Δ | CE ₹ | PE ₹ | Vol | Zone
-        table_data = [["Strike", "PE OI", "CE OI", "PCR", "PCR Δ", "CE ₹", "PE ₹", "Vol", "Zone"]]
+        # ✅ 14 COLUMN TABLE
+        # Strike | PE Now | PE 5m | PE 15m | PE Δ% | CE Now | CE 5m | CE 15m | CE Δ% | PCR | PCR Δ | CE₹ | PE₹ | Zone
+        table_data = [[
+            "Strike", 
+            "PE Now", "PE 5m", "PE 15m", "PE Δ%",
+            "CE Now", "CE 5m", "CE 15m", "CE Δ%",
+            "PCR", "PCR Δ",
+            "CE₹", "PE₹",
+            "Zone"
+        ]]
         
         atm_strike = analysis['atm_strike']
         total_ce_oi = analysis["total_ce_oi"]
         total_pe_oi = analysis["total_pe_oi"]
-        total_ce_vol = 0
-        total_pe_vol = 0
+        
+        # Get 15min ago snapshot from cache for comparison
+        cache_15m_data = {}
+        cache = analysis.get("cache_snapshots", {})
         
         for i, strike in enumerate(analysis["strikes"]):
             ce = analysis["ce_data"][i]
@@ -2279,114 +2288,192 @@ class ChartGenerator:
             ce_ltp = ce.get('ltp', 0)
             pe_ltp = pe.get('ltp', 0)
             
-            # Volume
-            ce_vol = ce.get('volume', 0)
-            pe_vol = pe.get('volume', 0)
-            total_vol = ce_vol + pe_vol
-            total_ce_vol += ce_vol
-            total_pe_vol += pe_vol
-            
-            # PCR Change from previous
+            # Previous OI (5min ago)
             s_change = strike_changes.get(strike, {})
-            pcr_change = s_change.get("pcr_change", 0)
+            pe_5m = s_change.get("prev_pe_oi", pe_now)
+            ce_5m = s_change.get("prev_ce_oi", ce_now)
             
-            # Format PCR change with color indicator
+            # 15min ago (3 cycles back estimate)
+            pe_15m = s_change.get("pe_15m", pe_5m)
+            ce_15m = s_change.get("ce_15m", ce_5m)
+            
+            # Calculate PE change % (15m to now)
+            if pe_15m > 0:
+                pe_change_pct = ((pe_now - pe_15m) / pe_15m) * 100
+            else:
+                pe_change_pct = 0
+            
+            # Calculate CE change % (15m to now)
+            if ce_15m > 0:
+                ce_change_pct = ((ce_now - ce_15m) / ce_15m) * 100
+            else:
+                ce_change_pct = 0
+            
+            # PCR Change
+            prev_pcr = s_change.get("prev_pcr", pcr)
+            pcr_change = pcr - prev_pcr
+            
+            # Format PE change with arrow
+            if pe_change_pct > 5:
+                pe_delta = f"↑{pe_change_pct:+.1f}%"
+            elif pe_change_pct < -5:
+                pe_delta = f"↓{pe_change_pct:+.1f}%"
+            elif pe_change_pct != 0:
+                pe_delta = f"{pe_change_pct:+.1f}%"
+            else:
+                pe_delta = "—"
+            
+            # Format CE change with arrow
+            if ce_change_pct > 5:
+                ce_delta = f"↑{ce_change_pct:+.1f}%"
+            elif ce_change_pct < -5:
+                ce_delta = f"↓{ce_change_pct:+.1f}%"
+            elif ce_change_pct != 0:
+                ce_delta = f"{ce_change_pct:+.1f}%"
+            else:
+                ce_delta = "—"
+            
+            # Format PCR change
             if pcr_change > 0.1:
                 pcr_delta = f"↑{pcr_change:+.2f}"
             elif pcr_change < -0.1:
                 pcr_delta = f"↓{pcr_change:+.2f}"
+            elif pcr_change != 0:
+                pcr_delta = f"{pcr_change:+.2f}"
             else:
-                pcr_delta = f"{pcr_change:+.2f}" if pcr_change != 0 else "—"
+                pcr_delta = "—"
             
             # Zone
             if pcr > 2.5:
-                zone = "🟢🟢 SUPPORT"
+                zone = "🟢🟢SUP"
             elif pcr > 1.5:
-                zone = "🟢 Support"
+                zone = "🟢Sup"
             elif pcr < 0.5:
-                zone = "🔴🔴 RESIST"
+                zone = "🔴🔴RES"
             elif pcr < 0.7:
-                zone = "🔴 Resist"
+                zone = "🔴Res"
             else:
-                zone = "⚪ Neutral"
+                zone = "⚪Neu"
             
-            # ✅ Build row with all data
+            # ✅ Build row with all 14 columns
             row = [
                 f"₹{strike:,}{'*' if strike == atm_strike else ''}",
                 format_indian_number(pe_now),
+                format_indian_number(pe_5m),
+                format_indian_number(pe_15m),
+                pe_delta,
                 format_indian_number(ce_now),
+                format_indian_number(ce_5m),
+                format_indian_number(ce_15m),
+                ce_delta,
                 f"{pcr:.2f}",
                 pcr_delta,
                 f"₹{ce_ltp:.1f}",
                 f"₹{pe_ltp:.1f}",
-                format_indian_number(total_vol),
                 zone
             ]
             table_data.append(row)
         
         # Overall row
         overall_pcr_change = oi_changes.get("pcr_change", 0)
-        if overall_pcr_change > 0.05:
-            overall_pcr_delta = f"↑{overall_pcr_change:+.3f}"
-        elif overall_pcr_change < -0.05:
-            overall_pcr_delta = f"↓{overall_pcr_change:+.3f}"
+        overall_pe_change = oi_changes.get("pe_oi_change_pct", 0)
+        overall_ce_change = oi_changes.get("ce_oi_change_pct", 0)
+        
+        # Format overall changes
+        if overall_pe_change > 5:
+            overall_pe_delta = f"↑{overall_pe_change:+.1f}%"
+        elif overall_pe_change < -5:
+            overall_pe_delta = f"↓{overall_pe_change:+.1f}%"
         else:
-            overall_pcr_delta = f"{overall_pcr_change:+.3f}" if oi_changes.get("has_previous") else "—"
+            overall_pe_delta = f"{overall_pe_change:+.1f}%" if oi_changes.get("has_previous") else "—"
+        
+        if overall_ce_change > 5:
+            overall_ce_delta = f"↑{overall_ce_change:+.1f}%"
+        elif overall_ce_change < -5:
+            overall_ce_delta = f"↓{overall_ce_change:+.1f}%"
+        else:
+            overall_ce_delta = f"{overall_ce_change:+.1f}%" if oi_changes.get("has_previous") else "—"
+        
+        if overall_pcr_change > 0.05:
+            overall_pcr_delta = f"↑{overall_pcr_change:+.2f}"
+        elif overall_pcr_change < -0.05:
+            overall_pcr_delta = f"↓{overall_pcr_change:+.2f}"
+        else:
+            overall_pcr_delta = f"{overall_pcr_change:+.2f}" if oi_changes.get("has_previous") else "—"
         
         table_data.append([
-            "OVERALL",
+            "TOTAL",
             format_indian_number(total_pe_oi),
+            "", "",
+            overall_pe_delta,
             format_indian_number(total_ce_oi),
+            "", "",
+            overall_ce_delta,
             f"{overall_pcr:.2f}",
             overall_pcr_delta,
-            "",
-            "",
-            format_indian_number(total_ce_vol + total_pe_vol),
-            final_signal['signal'].value[:12]
+            "", "",
+            final_signal['signal'].value[:8]
         ])
         
         table = ax_table.table(
             cellText=table_data, loc='center', cellLoc='center',
-            colWidths=[0.11, 0.10, 0.10, 0.08, 0.09, 0.09, 0.09, 0.10, 0.14]
+            colWidths=[0.08, 0.065, 0.06, 0.06, 0.065, 0.065, 0.06, 0.06, 0.065, 0.055, 0.065, 0.055, 0.055, 0.08]
         )
         
         table.auto_set_font_size(False)
-        table.set_fontsize(10)
-        table.scale(1, 2.8)
+        table.set_fontsize(8)
+        table.scale(1, 2.5)
         
         # Style header - dark blue
-        for i in range(9):
+        for i in range(14):
             table[(0, i)].set_facecolor('#0f3460')
-            table[(0, i)].set_text_props(weight='bold', color='white', fontsize=11)
+            table[(0, i)].set_text_props(weight='bold', color='white', fontsize=9)
         
         # Style data rows
         for row_idx in range(1, len(table_data)):
-            for col_idx in range(9):
+            for col_idx in range(14):
                 cell = table[(row_idx, col_idx)]
                 cell.set_facecolor('#161b22')
-                cell.set_text_props(color='white', fontsize=9)
+                cell.set_text_props(color='white', fontsize=8)
         
         # Style summary row - green
         summary_row = len(table_data) - 1
-        for i in range(9):
+        for i in range(14):
             table[(summary_row, i)].set_facecolor('#1b4332')
-            table[(summary_row, i)].set_text_props(weight='bold', color='#00ff88', fontsize=10)
+            table[(summary_row, i)].set_text_props(weight='bold', color='#00ff88', fontsize=9)
         
         # Highlight ATM row - gold
         for i, strike in enumerate(analysis["strikes"], 1):
             if strike == atm_strike:
-                for j in range(9):
+                for j in range(14):
                     table[(i, j)].set_facecolor('#2d4263')
-                    table[(i, j)].set_text_props(weight='bold', color='#ffd700', fontsize=10)
+                    table[(i, j)].set_text_props(weight='bold', color='#ffd700', fontsize=8)
         
-        # Color PCR Change column based on direction
+        # Color change columns based on direction
         for row_idx in range(1, len(table_data)):
-            pcr_cell = table[(row_idx, 4)]  # PCR Δ column
-            cell_text = table_data[row_idx][4]
-            if '↑' in cell_text:
-                pcr_cell.set_text_props(color='#00ff88')  # Green for bullish
-            elif '↓' in cell_text:
-                pcr_cell.set_text_props(color='#ff6b6b')  # Red for bearish
+            # PE Δ% column (index 4)
+            pe_cell = table[(row_idx, 4)]
+            pe_text = table_data[row_idx][4]
+            if '↑' in pe_text:
+                pe_cell.set_text_props(color='#00ff88')  # Green = PE building = Bullish
+            elif '↓' in pe_text:
+                pe_cell.set_text_props(color='#ff6b6b')  # Red = PE unwinding = Bearish
+            
+            # CE Δ% column (index 8)
+            ce_cell = table[(row_idx, 8)]
+            ce_text = table_data[row_idx][8]
+            if '↑' in ce_text:
+                ce_cell.set_text_props(color='#ff6b6b')  # Red = CE building = Bearish
+            elif '↓' in ce_text:
+                ce_cell.set_text_props(color='#00ff88')  # Green = CE unwinding = Bullish
+            
+            # PCR Δ column (index 10)
+            pcr_cell = table[(row_idx, 10)]
+            pcr_text = table_data[row_idx][10]
+            if '↑' in pcr_text:
+                pcr_cell.set_text_props(color='#00ff88')  # Green = PCR up = Bullish
+            elif '↓' in pcr_text:
+                pcr_cell.set_text_props(color='#ff6b6b')  # Red = PCR down = Bearish
         
         plt.tight_layout()
         
